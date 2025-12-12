@@ -1,5 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+import time
+from src.config.logger import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 app = FastAPI()
 
@@ -13,6 +18,47 @@ app.add_middleware(
 )
 
 
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all HTTP requests"""
+    start_time = time.time()
+    
+    # Log request info
+    logger.info(f"Request started: {request.method} {request.url.path}")
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Calculate process time
+    process_time = time.time() - start_time
+    
+    # Log response info
+    logger.info(
+        f"Request completed: {request.method} {request.url.path} - "
+        f"Status: {response.status_code} - Time: {process_time:.3f}s"
+    )
+    
+    return response
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Log on application startup"""
+    logger.info("=" * 50)
+    logger.info("U-Finder Backend Application Started")
+    logger.info("=" * 50)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Log on application shutdown"""
+    logger.info("=" * 50)
+    logger.info("U-Finder Backend Application Shutdown")
+    logger.info("=" * 50)
+
+
 @app.get("/")
 async def root():
+    logger.info("Root path accessed")
     return {"message": "Hello World"}
