@@ -1,12 +1,28 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import time
 from src.config.logger import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events"""
+    # Startup
+    logger.info("=" * 50)
+    logger.info("U-Finder Backend Application Started")
+    logger.info("=" * 50)
+    yield
+    # Shutdown
+    logger.info("=" * 50)
+    logger.info("U-Finder Backend Application Shutdown")
+    logger.info("=" * 50)
+
+
+app = FastAPI(lifespan=lifespan)
 
 # CORS configuration
 app.add_middleware(
@@ -40,22 +56,6 @@ async def log_requests(request: Request, call_next):
     )
     
     return response
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Log on application startup"""
-    logger.info("=" * 50)
-    logger.info("U-Finder Backend Application Started")
-    logger.info("=" * 50)
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Log on application shutdown"""
-    logger.info("=" * 50)
-    logger.info("U-Finder Backend Application Shutdown")
-    logger.info("=" * 50)
 
 
 @app.get("/")
