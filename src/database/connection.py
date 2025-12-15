@@ -9,7 +9,7 @@ load_dotenv()
 # Database configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:PostgreSQL%40147.com@localhost:5432/u_finder"
+    "postgresql+asyncpg://postgres:your_password@localhost:5432/u_finder"
 )
 
 # Create async engine
