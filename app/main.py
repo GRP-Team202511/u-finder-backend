@@ -94,7 +94,7 @@ async def root():
     logger.info("Root path accessed")
     return {
         "message": "Welcome to U-Finder Backend API",
-        "version": "1.0.0",
+        "version": settings.app_version,
         "docs": "/docs"
     }
 
