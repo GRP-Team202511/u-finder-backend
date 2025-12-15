@@ -99,8 +99,8 @@ async def root():
     }
 
 
-# 健康检查
+# Health check
 @app.get("/health", tags=["Basic"])
 async def health_check():
-    """健康检查接口"""
+    """Health check endpoint"""
     return {"status": "healthy", "service": "u-finder-backend"}
