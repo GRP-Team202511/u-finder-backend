@@ -1,5 +1,5 @@
 """
-Routers模块 - 路由管理
+Routers module - Route management
 """
 from src.routers.auth import router as auth_router
 
