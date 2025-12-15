@@ -2,7 +2,6 @@
 Authentication related Pydantic models
 """
 from pydantic import BaseModel, EmailStr
-from typing import Optional
 
 
 # =========== Login ===========
