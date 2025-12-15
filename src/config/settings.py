@@ -37,8 +37,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_dir: str = "logs"
     
-    # Database Settings (if needed)
-    database_url: str = "sqlite:///./app.db"
+    # Database Settings
+    # Default is a placeholder; set DATABASE_URL in your environment for production use.
+    database_url: str = "postgresql://user:password@localhost:5432/dbname"
     
     # API Keys & Secrets (if needed)
     secret_key: str = "your-secret-key-change-in-production"
