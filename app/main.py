@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import time
 from src.config.logger import get_logger
+from src.config.settings import get_settings
 
-# Initialize logger
+# Initialize logger and settings
 logger = get_logger(__name__)
+settings = get_settings()
 
 
 @asynccontextmanager
@@ -13,7 +15,8 @@ async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
     logger.info("=" * 50)
-    logger.info("U-Finder Backend Application Started")
+    logger.info(f"U-Finder Backend Application Started - {settings.app_name} v{settings.app_version}")
+    logger.info(f"Environment: {settings.environment}")
     logger.info("=" * 50)
     yield
     # Shutdown
@@ -22,15 +25,20 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 50)
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    debug=settings.debug,
+    lifespan=lifespan
+)
 
-# CORS configuration
+# CORS configuration from environment variables
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=settings.cors_credentials,
+    allow_methods=settings.cors_methods.split(",") if settings.cors_methods != "*" else ["*"],
+    allow_headers=settings.cors_headers.split(",") if settings.cors_headers != "*" else ["*"],
 )
 
 
