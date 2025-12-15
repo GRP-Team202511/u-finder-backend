@@ -12,10 +12,13 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://postgres:your_password@localhost:5432/u_finder"
 )
 
+# Read echo setting from environment variable (default: False)
+DATABASE_ECHO = os.getenv("DATABASE_ECHO", "False").lower() in ("1", "true", "yes", "on")
+
 # Create async engine
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,  # Set to False in production
+    echo=DATABASE_ECHO,  # Controlled by DATABASE_ECHO env var
     future=True
 )
 
