@@ -16,7 +16,10 @@ DATABASE_ECHO = os.getenv("DATABASE_ECHO", "False").lower() in ("1", "true", "ye
 engine = create_async_engine(
     DATABASE_URL,
     echo=DATABASE_ECHO,  # Controlled by DATABASE_ECHO env var
-    future=True
+    future=True,
+    pool_pre_ping=True,  # Enable connection health checks
+    pool_size=5,         # Connection pool size
+    max_overflow=10      # Maximum overflow connections
 )
 
 # Create async session maker
@@ -47,5 +50,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db():
     """Initialize database - create all tables"""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        # Re-raise the exception to be handled by the caller
+        raise Exception(f"Failed to initialize database: {str(e)}")
