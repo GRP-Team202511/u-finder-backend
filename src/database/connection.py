@@ -1,12 +1,13 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from typing import AsyncGenerator
+import os
 from src.config import get_settings
 
 
 # Database configuration
 settings = get_settings()
-DATABASE_URL = settings.DATABASE_URL
+DATABASE_URL = settings.database_url
 
 # Read echo setting from environment variable (default: False)
 DATABASE_ECHO = os.getenv("DATABASE_ECHO", "False").lower() in ("1", "true", "yes", "on")
