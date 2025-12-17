@@ -5,7 +5,6 @@ Loads and manages environment variables using pydantic
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import List
-import os
 from dotenv import load_dotenv
 
 # Load .env file
