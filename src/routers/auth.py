@@ -66,7 +66,7 @@ async def login(
             logger.warning(f"Incorrect password for user: {login_data.email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect Password"
+                detail="Incorrect password"
             )
         
         # Create access token
