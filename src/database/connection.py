@@ -1,16 +1,12 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from typing import AsyncGenerator
-import os
-from dotenv import load_dotenv
+from src.config import get_settings
 
-load_dotenv()
 
 # Database configuration
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:your_password@localhost:5432/u_finder"
-)
+settings = get_settings()
+DATABASE_URL = settings.DATABASE_URL
 
 # Read echo setting from environment variable (default: False)
 DATABASE_ECHO = os.getenv("DATABASE_ECHO", "False").lower() in ("1", "true", "yes", "on")
