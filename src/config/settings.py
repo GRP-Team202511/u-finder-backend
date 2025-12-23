@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     secret_key: str = "your-secret-key-change-in-production"
     access_token_expire_minutes: int = 10080  # 7 days
 
+    # Email Settings
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "U-Finder"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+
     # Workers
     workers: int = 4
 

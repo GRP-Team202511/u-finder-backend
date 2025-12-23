@@ -29,6 +29,7 @@ from src.utils import (
     generate_verification_code,
     hash_password,
     verify_password,
+    send_verification_email,
 )
 from src.config.logger import get_logger
 from src.database import get_db, User, SignUpVerification, PasswordReset
@@ -157,9 +158,17 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     db.add(verification)
     await db.commit()
     
-    # In production, send verification code via email
+    # Send verification code via email
     logger.info(f"Signup temp token created for email: {request.email}")
-    logger.info(f"Verification code (for testing): {verification_code}")
+    email_sent = await send_verification_email(
+        to_email=request.email,
+        verification_code=verification_code,
+        name=request.name,
+        email_type="signup"
+    )
+    
+    if not email_sent:
+        logger.warning(f"Failed to send verification email to {request.email}, but signup record created")
     
     return SignUpResponse(token=temp_token)
 
@@ -287,9 +296,17 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     db.add(reset_record)
     await db.commit()
     
-    # In production, send reset code via email
+    # Send reset code via email
     logger.info(f"Password reset temp token created for email: {request.email}")
-    logger.info(f"Reset code (for testing): {reset_code}")
+    email_sent = await send_verification_email(
+        to_email=request.email,
+        verification_code=reset_code,
+        name=user.name,
+        email_type="reset"
+    )
+    
+    if not email_sent:
+        logger.warning(f"Failed to send reset code email to {request.email}, but reset record created")
     
     return ResetPasswordResponse(temp_token=temp_token)
 
