@@ -12,7 +12,7 @@ if __name__ == "__main__":
     logger.info(f"Server address: http://{settings.server_host}:{settings.server_port}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Development mode: Hot reload {'enabled' if settings.reload else 'disabled'}")
-    
+
     uvicorn.run(
         "app.main:app",
         host=settings.server_host,

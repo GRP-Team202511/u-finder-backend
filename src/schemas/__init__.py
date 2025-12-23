@@ -1,12 +1,17 @@
-"""
-Schemas module - Data validation models
-"""
-from src.schemas.auth import (
+from .auth import (
     LoginRequest,
     LoginResponse,
     SignUpRequest,
     SignUpResponse,
-    ErrorResponse
+    VerifySignupEmailRequest,
+    VerifySignupEmailResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
+    VerifyResetCodeRequest,
+    VerifyResetCodeResponse,
+    ConfirmResetPasswordRequest,
+    ConfirmResetPasswordResponse,
+    ErrorResponse,
 )
 
 __all__ = [
@@ -14,5 +19,13 @@ __all__ = [
     "LoginResponse",
     "SignUpRequest",
     "SignUpResponse",
-    "ErrorResponse"
+    "VerifySignupEmailRequest",
+    "VerifySignupEmailResponse",
+    "ResetPasswordRequest",
+    "ResetPasswordResponse",
+    "VerifyResetCodeRequest",
+    "VerifyResetCodeResponse",
+    "ConfirmResetPasswordRequest",
+    "ConfirmResetPasswordResponse",
+    "ErrorResponse",
 ]

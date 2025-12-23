@@ -1,12 +1,23 @@
 """
 Utils module - Utility functions
 """
-from src.utils.jwt_utils import create_access_token, decode_access_token
-from src.utils.password_utils import verify_password, get_password_hash
+from .jwt_utils import (
+    create_access_token,
+    verify_token,
+    create_temp_token,
+    generate_verification_code,
+)
+from .password_utils import hash_password, verify_password
+from .cleanup import cleanup_all_expired_records, cleanup_expired_verifications, cleanup_expired_password_resets
 
 __all__ = [
     "create_access_token",
-    "decode_access_token",
+    "verify_token",
+    "create_temp_token",
+    "generate_verification_code",
+    "hash_password",
     "verify_password",
-    "get_password_hash"
+    "cleanup_all_expired_records",
+    "cleanup_expired_verifications",
+    "cleanup_expired_password_resets",
 ]
