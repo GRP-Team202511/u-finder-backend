@@ -40,18 +40,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise
-        finally:
-            await session.close()
 
 
 async def init_db():
     """Initialize database - create all tables"""
     try:
         async with engine.begin() as conn:
+            # Drop all existing tables and recreate them
+            # WARNING: This will delete all data! Use migrations in production
+            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
         # Re-raise the exception to be handled by the caller
