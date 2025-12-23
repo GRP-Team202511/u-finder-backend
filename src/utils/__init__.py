@@ -9,6 +9,7 @@ from .jwt_utils import (
 )
 from .password_utils import hash_password, verify_password
 from .cleanup import cleanup_all_expired_records, cleanup_expired_verifications, cleanup_expired_password_resets
+from .email_utils import send_verification_email
 
 __all__ = [
     "create_access_token",
@@ -20,4 +21,5 @@ __all__ = [
     "cleanup_all_expired_records",
     "cleanup_expired_verifications",
     "cleanup_expired_password_resets",
+    "send_verification_email",
 ]
