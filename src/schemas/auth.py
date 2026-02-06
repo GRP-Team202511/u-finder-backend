@@ -79,7 +79,9 @@ class VerifyResetCodeResponse(BaseModel):
 
 class ConfirmResetPasswordRequest(BaseModel):
     code: str
-    new_password: str = Field(..., min_length=8, max_length=128, description="New password (8-128 characters)")
+    new_password: str = Field(
+        ..., min_length=8, max_length=128, description="New password (8-128 characters)", alias="newPassword"
+    )
     
     @field_validator('new_password')
     @classmethod
@@ -92,6 +94,10 @@ class ConfirmResetPasswordRequest(BaseModel):
         if not re.search(r'[0-9]', v):
             raise ValueError('Password must contain at least one number')
         return v
+
+    model_config = {
+        "populate_by_name": True
+    }
 
 
 class ConfirmResetPasswordResponse(BaseModel):

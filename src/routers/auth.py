@@ -39,6 +39,70 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
+async def _reset_password_with_code(
+    request: ConfirmResetPasswordRequest,
+    temp_token: str,
+    db: AsyncSession,
+) -> ConfirmResetPasswordResponse:
+    """
+    Internal helper to verify reset code and update password
+    """
+    logger.info("Password reset confirmation attempt with temp_token")
+    
+    # Check if temp token exists
+    result = await db.execute(
+        select(PasswordReset).where(PasswordReset.temp_token == temp_token)
+    )
+    reset_record = result.scalar_one_or_none()
+    
+    if not reset_record:
+        logger.warning("Password reset failed: Invalid temp token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Check if expired
+    if datetime.now(timezone.utc) > reset_record.expires_at:
+        logger.warning("Password reset failed: Expired token")
+        await db.delete(reset_record)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Verify code
+    if request.code != reset_record.reset_code:
+        logger.warning("Password reset failed: Wrong reset code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Find user and update password
+    result = await db.execute(select(User).where(User.email == reset_record.email))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        logger.error(f"Password reset failed: User not found for email: {reset_record.email}")
+        await db.delete(reset_record)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"}
+        )
+    
+    # Update password
+    user.password_hash = hash_password(request.new_password)
+    await db.delete(reset_record)  # Clean up reset record
+    await db.commit()
+    
+    logger.info(f"Password reset successful for user: {user.email}")
+    
+    return ConfirmResetPasswordResponse(message="Password reset successfully")
+
+
 # ============ Login ============
 @router.post(
     "/login",
@@ -392,57 +456,33 @@ async def confirm_reset_password(
     
     Returns success message on password reset
     """
-    logger.info(f"Password reset confirmation attempt with temp_token")
+    return await _reset_password_with_code(request, temp_token, db)
+
+
+# ============ Reset Password - Verify & Update (Combined) ============
+@router.post(
+    "/reset/verify",
+    response_model=ConfirmResetPasswordResponse,
+    summary="Reset Password - Verification",
+    responses={
+        401: {"model": ErrorResponse, "description": "Wrong code or expired token"},
+    },
+)
+async def reset_verify(
+    request: ConfirmResetPasswordRequest,
+    temp_token: str = Header(..., alias="temp_token"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Verify password reset code and update user password in one step.
     
-    # Check if temp token exists
-    result = await db.execute(
-        select(PasswordReset).where(PasswordReset.temp_token == temp_token)
-    )
-    reset_record = result.scalar_one_or_none()
+    This is a combined endpoint that verifies the reset code and sets a new password.
     
-    if not reset_record:
-        logger.warning("Password reset failed: Invalid temp token")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Wrong code or expired token"}
-        )
+    **Request Parameters:**
+    - **temp_token** (header): Temporary token from reset-password endpoint
+    - **code** (body): Verification code sent to user's email
+    - **newPassword** (body): New password to set (must be 8+ characters with letters and numbers)
     
-    # Check if expired
-    if datetime.now(timezone.utc) > reset_record.expires_at:
-        logger.warning("Password reset failed: Expired token")
-        await db.delete(reset_record)
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Wrong code or expired token"}
-        )
-    
-    # Verify code
-    if request.code != reset_record.reset_code:
-        logger.warning("Password reset failed: Wrong reset code")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Wrong code or expired token"}
-        )
-    
-    # Find user and update password
-    result = await db.execute(select(User).where(User.email == reset_record.email))
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        logger.error(f"Password reset failed: User not found for email: {reset_record.email}")
-        await db.delete(reset_record)
-        await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"message": "User not found"}
-        )
-    
-    # Update password
-    user.password_hash = hash_password(request.new_password)
-    await db.delete(reset_record)  # Clean up reset record
-    await db.commit()
-    
-    logger.info(f"Password reset successful for user: {user.email}")
-    
-    return ConfirmResetPasswordResponse(message="Password reset successful")
+    **Returns:** Success message on password reset
+    """
+    return await _reset_password_with_code(request, temp_token, db)
