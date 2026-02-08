@@ -547,6 +547,7 @@ async def reset_verify(
     response_model=UpdateUserTypeResponse,
     status_code=status.HTTP_200_OK,
     summary="Admin: Update User Type",
+    include_in_schema=False,
     responses={
         200: {"description": "User type updated successfully", "model": UpdateUserTypeResponse},
         403: {"description": "Admin privileges required", "model": ErrorResponse},
@@ -625,6 +626,7 @@ async def update_user_type(
     response_model=GetUserInfoResponse,
     status_code=status.HTTP_200_OK,
     summary="Admin: Get User Information",
+    include_in_schema=False,
     responses={
         200: {"description": "User information retrieved", "model": GetUserInfoResponse},
         403: {"description": "Admin privileges required", "model": ErrorResponse},
