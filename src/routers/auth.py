@@ -177,7 +177,7 @@ async def login(
         
         return LoginResponse(
             id=user.user_id,
-            name=user.name,
+            name=user.user_name,
             token=access_token
         )
         
@@ -238,7 +238,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     # For simplicity, create Account with is_blocked=True until verified
     # Default user_type=1 (student), administrators can modify through admin panel
     new_account = Account(
-        name=request.name,
+        user_name=request.name,
         email=email,
         password_hashed=password_hashed,
         user_type=1,  # Default: student user type (controlled by admin)
@@ -364,7 +364,7 @@ async def verify_signup_email(
     
     return VerifySignupEmailResponse(
         id=user.user_id,
-        name=user.name,
+        name=user.user_name,
         token=token
     )
 

@@ -11,7 +11,7 @@ class Account(Base):
     __tablename__ = "account"
 
     user_id = Column(BigInteger, primary_key=True, autoincrement=True, nullable=False)
-    name = Column(String(100), nullable=False, comment="User's display name")
+    user_name = Column(String(255), nullable=False, comment="User's display name")
     email = Column(String(255), unique=True, nullable=False, index=True, comment="Emails are all in small cases")
     password_hashed = Column(String(255), nullable=False)
     user_type = Column(SmallInteger, nullable=False)
@@ -30,7 +30,7 @@ class Account(Base):
     temp_tokens = relationship("TempToken", back_populates="account", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Account(user_id={self.user_id}, name={self.name}, email={self.email})>"
+        return f"<Account(user_id={self.user_id}, user_name={self.user_name}, email={self.email})>"
 
 
 class UserProfile(Base):
