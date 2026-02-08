@@ -5,8 +5,13 @@ Handles JWT token generation and verification
 import jwt
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Dict
+from fastapi import HTTPException, Header, status, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
 from src.config.settings import get_settings
+from src.config.constants import UserType
 
 # Get settings
 settings = get_settings()
@@ -81,3 +86,109 @@ def generate_verification_code(length: int = 6) -> str:
         Numeric verification code string
     """
     return ''.join([str(secrets.randbelow(10)) for _ in range(length)])
+
+
+def get_token_data(authorization: str = Header(...)) -> Dict:
+    """
+    Extract and verify JWT token from Authorization header
+    
+    Args:
+        authorization: Authorization header (Bearer token)
+    
+    Returns:
+        Dict with user_id, email, and user_type from token
+    
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    # Extract token from Authorization header
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Invalid authorization header format"}
+        )
+    
+    token = authorization.replace("Bearer ", "")
+    
+    # Verify token
+    payload = verify_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Invalid or expired token"}
+        )
+    
+    # Get user_id from payload
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Invalid token payload"}
+        )
+    
+    return {
+        "user_id": int(user_id),
+        "email": payload.get("email"),
+        "user_type": payload.get("user_type")
+    }
+
+
+async def verify_user_from_db(user_id: int, db: AsyncSession):
+    """
+    Verify user exists and is not blocked
+    
+    Args:
+        user_id: User ID
+        db: Database session
+    
+    Returns:
+        Account object
+    
+    Raises:
+        HTTPException: If user not found or blocked
+    """
+    from src.database import Account
+    
+    result = await db.execute(
+        select(Account).where(Account.user_id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"}
+        )
+    
+    if user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Account is blocked"}
+        )
+    
+    return user
+
+
+async def verify_admin_from_db(user_id: int, db: AsyncSession):
+    """
+    Verify user is admin
+    
+    Args:
+        user_id: User ID
+        db: Database session
+    
+    Returns:
+        Account object of admin user
+    
+    Raises:
+        HTTPException: If user not admin
+    """
+    user = await verify_user_from_db(user_id, db)
+    
+    if user.user_type != UserType.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Admin privileges required"}
+        )
+    
+    return user

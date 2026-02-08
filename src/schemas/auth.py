@@ -20,17 +20,17 @@ class LoginResponse(BaseModel):
 
 # ============ Sign Up ============
 class SignUpRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100, description="User's full name")
+    name: str = Field(..., min_length=1, max_length=100, description="User's display name")
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128, description="User's password (8-128 characters)")
+    # Note: user_type is automatically set to 1 (student) by default
+    # Administrators can change user type through admin panel
     
-    @field_validator('name')
+    @field_validator('email')
     @classmethod
-    def validate_name(cls, v: str) -> str:
-        """Validate name is not just whitespace"""
-        if not v or not v.strip():
-            raise ValueError('Name cannot be empty or just whitespace')
-        return v.strip()
+    def validate_email_lowercase(cls, v: str) -> str:
+        """Ensure email is lowercase"""
+        return v.lower()
     
     @field_validator('password')
     @classmethod
@@ -107,3 +107,36 @@ class ConfirmResetPasswordResponse(BaseModel):
 # ============ Error Response ============
 class ErrorResponse(BaseModel):
     message: str
+
+
+# ============ Admin - Update User Type ============
+class UpdateUserTypeRequest(BaseModel):
+    user_type: int = Field(..., description="New user type (1=student, 2=institution, 99=admin)")
+    
+    @field_validator('user_type')
+    @classmethod
+    def validate_user_type(cls, v: int) -> int:
+        """Validate user type value"""
+        from src.config.constants import UserType
+        if not UserType.is_valid(v):
+            raise ValueError(f'Invalid user type. Must be one of: {UserType.STUDENT}, {UserType.INSTITUTION}, {UserType.ADMIN}')
+        return v
+
+
+class UpdateUserTypeResponse(BaseModel):
+    user_id: int
+    user_type: int
+    message: str
+
+
+class GetUserInfoResponse(BaseModel):
+    user_id: int
+    email: str
+    user_type: int
+    user_type_description: str
+    is_blocked: bool
+    is_2fa_enabled: bool
+    passkey_enabled: bool
+    created_at: str
+    updated_at: str
+
