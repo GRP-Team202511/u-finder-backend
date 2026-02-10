@@ -77,6 +77,15 @@ class VerifyResetCodeResponse(BaseModel):
     message: str
 
 
+class ResendResetCodeResponse(BaseModel):
+    message: str
+
+
+class RateLimitResponse(BaseModel):
+    message: str
+    retryAfter: int
+
+
 class ConfirmResetPasswordRequest(BaseModel):
     code: str
     new_password: str = Field(

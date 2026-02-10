@@ -18,6 +18,8 @@ from src.schemas.auth import (
     ResetPasswordResponse,
     VerifyResetCodeRequest,
     VerifyResetCodeResponse,
+    ResendResetCodeResponse,
+    RateLimitResponse,
     ConfirmResetPasswordRequest,
     ConfirmResetPasswordResponse,
     UpdateUserTypeRequest,
@@ -485,6 +487,102 @@ async def verify_reset_code(
     logger.info(f"Reset code verified successfully for user_id: {reset_record.user_id}")
     
     return VerifyResetCodeResponse(message="Code verified successfully")
+
+
+# ============ Resend Reset Code ============
+@router.post(
+    "/resend-reset-code",
+    response_model=ResendResetCodeResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Token expired or invalid"},
+        404: {"model": ErrorResponse, "description": "User not found"},
+        429: {"model": RateLimitResponse, "description": "Too many requests"},
+    },
+)
+async def resend_reset_code(
+    temp_token: str = Header(..., alias="temp-token"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Resend password reset verification code
+
+    - **temp-token**: Temporary token from reset-password endpoint (in header)
+
+    Returns success message if code is resent successfully.
+    """
+    logger.info("Resend reset code attempt with temp-token")
+
+    # Check if temp token exists with correct type
+    result = await db.execute(
+        select(TempToken).where(
+            TempToken.token_hashed == temp_token,
+            TempToken.token_type == "password_reset",
+        )
+    )
+    reset_record = result.scalar_one_or_none()
+
+    if not reset_record:
+        logger.warning("Resend reset code failed: Invalid temp token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"},
+        )
+
+    now = datetime.now(timezone.utc)
+
+    # Check if expired
+    if now > reset_record.expire_at:
+        logger.warning("Resend reset code failed: Expired token")
+        await db.delete(reset_record)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"},
+        )
+
+    # Rate limit: 60 seconds between resends
+    if reset_record.created_at:
+        retry_after = 60 - int((now - reset_record.created_at).total_seconds())
+        if retry_after > 0:
+            logger.warning("Resend reset code throttled")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many requests. Please wait before requesting again.",
+                    "retryAfter": retry_after,
+                },
+            )
+
+    # Find user email
+    result = await db.execute(
+        select(Account).where(Account.user_id == reset_record.user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        logger.error(f"Resend reset code failed: User not found for user_id: {reset_record.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"},
+        )
+
+    # Generate and send new reset code
+    reset_code = generate_verification_code()
+    email_sent = await send_verification_email(
+        to_email=user.email,
+        verification_code=reset_code,
+        name=user.email.split("@")[0],
+        email_type="reset",
+    )
+
+    if not email_sent:
+        logger.warning(f"Failed to resend reset code email to {user.email}")
+
+    # Update created_at to enforce rate limit window from last resend
+    reset_record.created_at = now
+    await db.commit()
+
+    return ResendResetCodeResponse(message="Verification code resent successfully")
 
 
 # ============ Confirm Reset Password ============
