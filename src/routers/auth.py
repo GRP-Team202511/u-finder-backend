@@ -83,9 +83,13 @@ async def _reset_password_with_code(
             detail={"message": "Wrong code or expired token"}
         )
     
-    # Verify code (stored in token_hashed for simplicity, or use separate field)
-    # For now, we'll assume code is passed correctly
-    # TODO: Add proper code verification logic
+    # Verify code against stored hash
+    if not reset_record.verification_code_hashed or not verify_password(request.code, reset_record.verification_code_hashed):
+        logger.warning("Password reset failed: Invalid verification code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
     
     # Find user and update password
     result = await db.execute(
@@ -251,11 +255,12 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new_account)
     
-    # Create temp token for email verification
+    # Create temp token for email verification with hashed verification code
     temp_token_record = TempToken(
         user_id=new_account.user_id,
         token_hashed=temp_token,
         token_type="email_verify",
+        verification_code_hashed=hash_password(verification_code),  # Hash the verification code
         expire_at=datetime.now(timezone.utc) + timedelta(hours=24)  # 24 hour expiry
     )
     
@@ -274,27 +279,19 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     if not email_sent:
         logger.warning(f"Failed to send verification email to {email}, but signup record created")
     
-    return SignUpResponse(token=temp_token)
+    return SignUpResponse(temp_token=temp_token)
 
 
 # ============ Verify Signup Email ============
-@router.post(
-    "/verify-signup-email",
-    response_model=VerifySignupEmailResponse,
-    status_code=status.HTTP_201_CREATED,
-    responses={
-        401: {"model": ErrorResponse, "description": "Wrong code"},
-    },
-)
-async def verify_signup_email(
+async def _verify_signup_email_impl(
     request: VerifySignupEmailRequest,
-    temp_token: str = Header(..., alias="temp_token"),
-    db: AsyncSession = Depends(get_db)
-):
+    temp_token: str,
+    db: AsyncSession
+) -> VerifySignupEmailResponse:
     """
-    Signup email verification endpoint
+    Internal implementation for signup email verification
     
-    - **temp_token**: Temporary token from signup (in header)
+    - **temp_token**: Temporary token from signup
     - **code**: Verification code sent to email
     
     Returns JWT token on successful verification and activates the user account
@@ -327,8 +324,13 @@ async def verify_signup_email(
             detail={"message": "Wrong code"}
         )
     
-    # Verify code
-    # TODO: Add proper code verification (for now assuming code is correct)
+    # Verify code against stored hash
+    if not verification.verification_code_hashed or not verify_password(request.code, verification.verification_code_hashed):
+        logger.warning("Signup email verification failed: Invalid verification code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code"}
+        )
     
     # Get user account and activate it
     result = await db.execute(
@@ -371,6 +373,54 @@ async def verify_signup_email(
     )
 
 
+@router.post(
+    "/verify",
+    response_model=VerifySignupEmailResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        401: {"model": ErrorResponse, "description": "Wrong code"},
+    },
+)
+async def verify(
+    request: VerifySignupEmailRequest,
+    temp_token: str = Header(..., alias="Temp-Token"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify signup email (short alias for /verify-signup-email)
+    
+    - **temp_token**: Temporary token from signup (in header)
+    - **code**: Verification code sent to email
+    
+    Returns JWT token on successful verification and activates the user account
+    """
+    return await _verify_signup_email_impl(request, temp_token, db)
+
+
+@router.post(
+    "/verify-signup-email",
+    response_model=VerifySignupEmailResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        401: {"model": ErrorResponse, "description": "Wrong code"},
+    },
+)
+async def verify_signup_email(
+    request: VerifySignupEmailRequest,
+    temp_token: str = Header(..., alias="Temp-Token"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify signup email (full endpoint path)
+    
+    - **temp_token**: Temporary token from signup (in header)
+    - **code**: Verification code sent to email
+    
+    Returns JWT token on successful verification and activates the user account
+    """
+    return await _verify_signup_email_impl(request, temp_token, db)
+
+
 # ============ Reset Password ============
 @router.post(
     "/reset-password",
@@ -406,11 +456,12 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     temp_token = create_temp_token()
     reset_code = generate_verification_code()
     
-    # Create password reset record
+    # Create password reset record with hashed verification code
     reset_record = TempToken(
         user_id=user.user_id,
         token_hashed=temp_token,
         token_type="password_reset",
+        verification_code_hashed=hash_password(reset_code),  # Hash the reset code
         expire_at=datetime.now(timezone.utc) + timedelta(hours=1)  # 1 hour expiry
     )
     
@@ -481,8 +532,13 @@ async def verify_reset_code(
             detail={"message": "Wrong code or expired token"}
         )
     
-    # Verify code
-    # TODO: Add proper code verification logic
+    # Verify code against stored hash
+    if not reset_record.verification_code_hashed or not verify_password(request.code, reset_record.verification_code_hashed):
+        logger.warning("Reset code verification failed: Invalid verification code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
     
     logger.info(f"Reset code verified successfully for user_id: {reset_record.user_id}")
     
@@ -578,8 +634,9 @@ async def resend_reset_code(
     if not email_sent:
         logger.warning(f"Failed to resend reset code email to {user.email}")
 
-    # Update created_at to enforce rate limit window from last resend
+    # Update created_at and verification_code_hashed for the new code
     reset_record.created_at = now
+    reset_record.verification_code_hashed = hash_password(reset_code)
     await db.commit()
 
     return ResendResetCodeResponse(message="Verification code resent successfully")

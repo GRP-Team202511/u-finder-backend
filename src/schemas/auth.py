@@ -46,7 +46,7 @@ class SignUpRequest(BaseModel):
 
 
 class SignUpResponse(BaseModel):
-    token: str  # temp_token for email verification
+    temp_token: str  # Temporary token for email verification
 
 
 # ============ Verify Signup Email ============

@@ -137,6 +137,7 @@ class TempToken(Base):
     user_id = Column(BigInteger, ForeignKey("account.user_id", ondelete="CASCADE"), nullable=False)
     token_hashed = Column(String(500), unique=True, nullable=False)
     token_type = Column(String(50), nullable=False, comment="e.g., email_verify, password_reset, email_change")
+    verification_code_hashed = Column(String(255), nullable=True, comment="Hashed verification code for email/reset verification")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     expire_at = Column(DateTime(timezone=True), nullable=False)
 
