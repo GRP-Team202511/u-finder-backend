@@ -9,6 +9,7 @@ from .jwt_utils import (
     get_token_data,
     verify_user_from_db,
     verify_admin_from_db,
+    verify_refresh_token_from_db,
 )
 from .password_utils import hash_password, verify_password
 from .cleanup import cleanup_all_expired_records, cleanup_expired_temp_tokens, cleanup_expired_refresh_tokens
@@ -22,6 +23,7 @@ __all__ = [
     "get_token_data",
     "verify_user_from_db",
     "verify_admin_from_db",
+    "verify_refresh_token_from_db",
     "hash_password",
     "verify_password",
     "cleanup_all_expired_records",

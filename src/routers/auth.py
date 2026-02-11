@@ -10,6 +10,7 @@ from sqlalchemy import select
 from src.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    LogoutResponse,
     SignUpRequest,
     SignUpResponse,
     VerifySignupEmailRequest,
@@ -40,7 +41,7 @@ from src.utils import (
 )
 from src.config.logger import get_logger
 from src.config.constants import UserType
-from src.database import get_db, Account, UserProfile, TempToken
+from src.database import get_db, Account, UserProfile, TempToken, RefreshToken
 
 logger = get_logger(__name__)
 
@@ -130,6 +131,7 @@ async def _reset_password_with_code(
 )
 async def login(
     login_data: LoginRequest,
+    user_agent: str = Header(default="Unknown", alias="User-Agent"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -174,17 +176,23 @@ async def login(
                 detail={"message": "Incorrect password"}
             )
         
-        # Create access token
-        access_token = create_access_token(
-            data={"sub": str(user.user_id), "email": user.email, "user_type": user.user_type}
+        # Create refresh token and store in database
+        refresh_token = create_temp_token()
+        refresh_token_record = RefreshToken(
+            user_id=user.user_id,
+            token_hashed=hash_password(refresh_token),
+            user_agent=user_agent[:100],  # Limit to 100 chars
+            expire_at=datetime.now(timezone.utc) + timedelta(days=30)
         )
+        db.add(refresh_token_record)
+        await db.commit()
         
         logger.info(f"Login successful for user: {email}")
         
         return LoginResponse(
             id=user.user_id,
             name=user.user_name,
-            token=access_token
+            token=refresh_token  # Return refresh token as session token
         )
         
     except HTTPException:
@@ -195,6 +203,70 @@ async def login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"}
         )
+
+
+# ============ Logout ============
+@router.post(
+    "/logout",
+    response_model=LogoutResponse,
+    status_code=status.HTTP_200_OK,
+    summary="User Logout",
+    responses={
+        200: {"description": "Logout successful", "model": LogoutResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse}
+    }
+)
+async def logout(
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    User logout endpoint - deletes the refresh token from database
+    
+    - **Authorization**: Bearer token (refresh token) in header
+    """
+    try:
+        # Extract token from Authorization header
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid authorization header format"}
+            )
+        
+        token = authorization.replace("Bearer ", "")
+        
+        logger.info("Logout attempt with token")
+        
+        # Find and delete the refresh token
+        result = await db.execute(
+            select(RefreshToken).where(RefreshToken.token_hashed == hash_password(token))
+        )
+        refresh_token_record = result.scalar_one_or_none()
+        
+        if not refresh_token_record:
+            logger.warning("Logout failed: Token not found")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"}
+            )
+        
+        # Delete the refresh token
+        await db.delete(refresh_token_record)
+        await db.commit()
+        
+        logger.info(f"Logout successful for user_id: {refresh_token_record.user_id}")
+        
+        return LogoutResponse(message="Logged out successfully")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Logout error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"}
+        )
+
 
 # ============ Sign Up ============
 @router.post(
@@ -286,6 +358,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
 async def _verify_signup_email_impl(
     request: VerifySignupEmailRequest,
     temp_token: str,
+    user_agent: str,
     db: AsyncSession
 ) -> VerifySignupEmailResponse:
     """
@@ -359,17 +432,23 @@ async def _verify_signup_email_impl(
     await db.commit()
     await db.refresh(user)
     
-    # Generate JWT token
-    token = create_access_token(
-        data={"sub": str(user.user_id), "email": user.email, "user_type": user.user_type}
+    # Create refresh token and store in database
+    refresh_token = create_temp_token()
+    refresh_token_record = RefreshToken(
+        user_id=user.user_id,
+        token_hashed=hash_password(refresh_token),
+        user_agent=user_agent[:100],  # Limit to 100 chars
+        expire_at=datetime.now(timezone.utc) + timedelta(days=30)
     )
+    db.add(refresh_token_record)
+    await db.commit()
     
     logger.info(f"Signup email verified and user activated with ID: {user.user_id}")
     
     return VerifySignupEmailResponse(
         id=user.user_id,
         name=user.user_name,
-        token=token
+        token=refresh_token  # Return refresh token as session token
     )
 
 
@@ -384,6 +463,7 @@ async def _verify_signup_email_impl(
 async def verify(
     request: VerifySignupEmailRequest,
     temp_token: str = Header(..., alias="Temp-Token"),
+    user_agent: str = Header(default="Unknown", alias="User-Agent"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -394,7 +474,7 @@ async def verify(
     
     Returns JWT token on successful verification and activates the user account
     """
-    return await _verify_signup_email_impl(request, temp_token, db)
+    return await _verify_signup_email_impl(request, temp_token, user_agent, db)
 
 
 @router.post(
@@ -408,6 +488,7 @@ async def verify(
 async def verify_signup_email(
     request: VerifySignupEmailRequest,
     temp_token: str = Header(..., alias="Temp-Token"),
+    user_agent: str = Header(default="Unknown", alias="User-Agent"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -418,7 +499,7 @@ async def verify_signup_email(
     
     Returns JWT token on successful verification and activates the user account
     """
-    return await _verify_signup_email_impl(request, temp_token, db)
+    return await _verify_signup_email_impl(request, temp_token, user_agent, db)
 
 
 # ============ Reset Password ============
