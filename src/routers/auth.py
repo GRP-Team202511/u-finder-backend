@@ -628,7 +628,7 @@ async def verify_reset_code(
 
 # ============ Resend Reset Code ============
 @router.post(
-    "/resend-reset-code",
+    "/reset/resend",
     response_model=ResendResetCodeResponse,
     responses={
         401: {"model": ErrorResponse, "description": "Token expired or invalid"},
@@ -637,13 +637,13 @@ async def verify_reset_code(
     },
 )
 async def resend_reset_code(
-    temp_token: str = Header(..., alias="temp-token"),
+    temp_token: str = Header(..., alias="Temp-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Resend password reset verification code
 
-    - **temp-token**: Temporary token from reset-password endpoint (in header)
+    - **Temp-Token**: Temporary token from /auth/reset endpoint (in header)
 
     Returns success message if code is resent successfully.
     """
