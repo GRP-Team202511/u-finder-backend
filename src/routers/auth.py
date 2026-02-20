@@ -504,7 +504,7 @@ async def verify_signup_email(
 
 # ============ Reset Password ============
 @router.post(
-    "/reset-password",
+    "/reset",
     response_model=ResetPasswordResponse,
     responses={
         404: {"model": ErrorResponse, "description": "No account record for this email"},
