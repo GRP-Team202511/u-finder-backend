@@ -759,7 +759,7 @@ async def confirm_reset_password(
 )
 async def reset_verify(
     request: ConfirmResetPasswordRequest,
-    temp_token: str = Header(..., alias="temp_token"),
+    temp_token: str = Header(..., alias="Temp-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     """
