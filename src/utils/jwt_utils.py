@@ -169,6 +169,77 @@ async def verify_user_from_db(user_id: int, db: AsyncSession):
     return user
 
 
+async def verify_refresh_token_from_db(token: str, db: AsyncSession):
+    """
+    Verify refresh token exists in database and is not expired
+    
+    Args:
+        token: Refresh token string
+        db: Database session
+    
+    Returns:
+        Tuple of (Account object, RefreshToken object)
+    
+    Raises:
+        HTTPException: If token invalid, expired, or user blocked
+    """
+    from src.database import Account, RefreshToken
+    from src.utils.password_utils import verify_password
+    from datetime import datetime, timezone
+    
+    # Find refresh token in database
+    result = await db.execute(
+        select(RefreshToken).where(RefreshToken.token_hashed == token)
+    )
+    refresh_token_record = result.scalar_one_or_none()
+    
+    if not refresh_token_record:
+        # Try to verify against hashed token
+        result = await db.execute(select(RefreshToken))
+        all_tokens = result.scalars().all()
+        
+        refresh_token_record = None
+        for rt in all_tokens:
+            if verify_password(token, rt.token_hashed):
+                refresh_token_record = rt
+                break
+        
+        if not refresh_token_record:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"}
+            )
+    
+    # Check if expired
+    if datetime.now(timezone.utc) > refresh_token_record.expire_at:
+        await db.delete(refresh_token_record)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Invalid or expired token"}
+        )
+    
+    # Get user account
+    result = await db.execute(
+        select(Account).where(Account.user_id == refresh_token_record.user_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"}
+        )
+    
+    if user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Account is blocked"}
+        )
+    
+    return user, refresh_token_record
+
+
 async def verify_admin_from_db(user_id: int, db: AsyncSession):
     """
     Verify user is admin

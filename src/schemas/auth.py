@@ -18,6 +18,11 @@ class LoginResponse(BaseModel):
     token: str
 
 
+# ============ Logout ============
+class LogoutResponse(BaseModel):
+    message: str
+
+
 # ============ Sign Up ============
 class SignUpRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="User's display name")
@@ -46,7 +51,7 @@ class SignUpRequest(BaseModel):
 
 
 class SignUpResponse(BaseModel):
-    token: str  # temp_token for email verification
+    temp_token: str  # Temporary token for email verification
 
 
 # ============ Verify Signup Email ============
@@ -75,6 +80,15 @@ class VerifyResetCodeRequest(BaseModel):
 
 class VerifyResetCodeResponse(BaseModel):
     message: str
+
+
+class ResendResetCodeResponse(BaseModel):
+    message: str
+
+
+class RateLimitResponse(BaseModel):
+    message: str
+    retryAfter: int
 
 
 class ConfirmResetPasswordRequest(BaseModel):
