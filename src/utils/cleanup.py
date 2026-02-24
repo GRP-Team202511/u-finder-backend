@@ -59,7 +59,6 @@ async def cleanup_expired_refresh_tokens(
     """
     try:
         from src.database import RefreshToken
-        from src.utils.session_utils import get_session, delete_session
 
         now = datetime.now(timezone.utc)
 
@@ -72,19 +71,14 @@ async def cleanup_expired_refresh_tokens(
             expired_records = result.scalars().all()
 
             if expired_records:
-                # Build a set of token_hashed values that are about to be deleted
-                expired_hashes = {rt.token_hashed for rt in expired_records}
-                affected_user_ids = {rt.user_id for rt in expired_records}
-
-                # For each affected user walk their Redis index set and evict
-                # any session whose stored token_hashed is in the expired set.
-                for user_id in affected_user_ids:
-                    index_key = f"user_sessions:{user_id}"
-                    tokens = await redis.smembers(index_key)
-                    for token in tokens:
-                        cached = await get_session(redis, token)
-                        if cached and cached.get("token_hashed") in expired_hashes:
-                            await delete_session(redis, token)
+                # The digest stored in user_sessions:{uid} IS token_hashed
+                # (both are HMAC-SHA256 of the plain token), so we can delete
+                # Redis keys directly without calling get_session().
+                pipe = redis.pipeline()
+                for rt in expired_records:
+                    pipe.delete(f"session:{rt.token_hashed}")
+                    pipe.srem(f"user_sessions:{rt.user_id}", rt.token_hashed)
+                await pipe.execute()
 
         # Bulk delete expired records from DB
         result = await db.execute(

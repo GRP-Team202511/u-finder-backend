@@ -199,7 +199,6 @@ async def login(
             token=refresh_token,
             user_id=user.user_id,
             user_agent=user_agent[:100],
-            token_hashed=token_hashed,
         )
 
         logger.info(f"Login successful for user: {email}")
@@ -255,14 +254,14 @@ async def logout(
 
         refresh_token_record = None
 
-        # 1. Try Redis cache first to get the stored bcrypt hash for an exact DB lookup
+        # 1. Try Redis cache first (key is HMAC-SHA256(token), same as DB token_hashed)
         session_data = await get_session(redis, token)
 
-        if session_data and session_data.get("token_hashed"):
-            # Cache hit: exact DB query using the stored hash
+        if session_data:
+            # Cache hit: recompute digest to do exact DB query
             result = await db.execute(
                 select(RefreshToken).where(
-                    RefreshToken.token_hashed == session_data["token_hashed"]
+                    RefreshToken.token_hashed == hash_token(token)
                 )
             )
             refresh_token_record = result.scalar_one_or_none()

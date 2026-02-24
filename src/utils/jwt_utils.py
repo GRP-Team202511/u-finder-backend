@@ -204,11 +204,12 @@ async def verify_refresh_token_from_db(
     # ── Step 1: Redis cache lookup ──────────────────────────────────────────
     if redis is not None:
         session_data = await get_session(redis, token)
-        if session_data and session_data.get("token_hashed"):
-            # Cache hit: use stored hash for exact DB query
+        if session_data:
+            # Cache hit: recompute digest (= token_hashed in DB) for exact query
+            from src.utils.password_utils import hash_token
             result = await db.execute(
                 select(RefreshToken).where(
-                    RefreshToken.token_hashed == session_data["token_hashed"]
+                    RefreshToken.token_hashed == hash_token(token)
                 )
             )
             refresh_token_record = result.scalar_one_or_none()
@@ -240,7 +241,6 @@ async def verify_refresh_token_from_db(
                     token=token,
                     user_id=refresh_token_record.user_id,
                     user_agent=refresh_token_record.user_agent,
-                    token_hashed=refresh_token_record.token_hashed,
                     ttl_seconds=remaining,
                 )
 

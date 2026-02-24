@@ -3,13 +3,19 @@ Redis session utility functions
 Handles all Redis-based session operations for refresh token caching.
 
 Key schema:
-  session:{token}           → Hash  { user_id, user_agent }   TTL = remaining token lifetime
-  user_sessions:{user_id}   → Set   of active token strings   TTL = SESSION_TTL_SECONDS + buffer
+  session:{HMAC-SHA256(token)}   → Hash  { user_id, user_agent }   TTL = remaining token lifetime
+  user_sessions:{user_id}        → Set   of HMAC-SHA256 digests    TTL = SESSION_TTL_SECONDS + buffer
+
+The plain-text token is NEVER stored in Redis. The key is always the same
+HMAC-SHA256 digest that is stored in the database (token_hashed column),
+so Redis and PostgreSQL are always consistent. A compromised Redis instance
+cannot yield usable session tokens.
 """
 from typing import Optional
 from redis.asyncio import Redis
 
 from src.config.logger import get_logger
+from src.utils.password_utils import hash_token
 
 logger = get_logger(__name__)
 
@@ -21,7 +27,8 @@ _INDEX_TTL_SECONDS = SESSION_TTL_SECONDS + 24 * 60 * 60  # 31 days
 
 
 def _session_key(token: str) -> str:
-    return f"session:{token}"
+    """token may be plain-text or already a digest — always hash it."""
+    return f"session:{hash_token(token)}"
 
 
 def _user_index_key(user_id: int) -> str:
@@ -33,38 +40,38 @@ async def save_session(
     token: str,
     user_id: int,
     user_agent: str,
-    token_hashed: str = "",
     ttl_seconds: int = SESSION_TTL_SECONDS,
 ) -> None:
     """
     Store a session in Redis.
 
+    The key is HMAC-SHA256(token), matching the token_hashed column in the DB.
+    The plain-text token is never written to Redis.
+
     Args:
-        redis:        Redis client
-        token:        Plain-text refresh token (used as cache key)
-        user_id:      User's ID
-        user_agent:   Client user-agent string
-        token_hashed: bcrypt hash stored in DB; kept here so logout can do
-                      an exact DB lookup instead of a full-table bcrypt scan
-        ttl_seconds:  Time-to-live in seconds (default: 30 days)
+        redis:       Redis client
+        token:       Plain-text refresh token
+        user_id:     User's ID
+        user_agent:  Client user-agent string
+        ttl_seconds: Time-to-live in seconds (default: 30 days)
     """
     try:
-        session_key = _session_key(token)
+        digest = hash_token(token)
+        session_key = f"session:{digest}"
         index_key = _user_index_key(user_id)
 
         pipe = redis.pipeline()
-        # Store session data as a hash
+        # Store session data — only non-secret fields
         pipe.hset(
             session_key,
             mapping={
                 "user_id": str(user_id),
                 "user_agent": user_agent,
-                "token_hashed": token_hashed,
             },
         )
         pipe.expire(session_key, ttl_seconds)
-        # Track this token under the user's index set
-        pipe.sadd(index_key, token)
+        # Track this digest under the user's index set
+        pipe.sadd(index_key, digest)
         pipe.expire(index_key, _INDEX_TTL_SECONDS)
         await pipe.execute()
 
@@ -92,7 +99,6 @@ async def get_session(redis: Redis, token: str) -> Optional[dict]:
         return {
             "user_id": int(data["user_id"]),
             "user_agent": data.get("user_agent", ""),
-            "token_hashed": data.get("token_hashed", ""),
         }
     except Exception as e:
         logger.error(f"Failed to get session from Redis: {str(e)}")
@@ -109,7 +115,8 @@ async def delete_session(redis: Redis, token: str) -> None:
         token: Plain-text refresh token
     """
     try:
-        session_key = _session_key(token)
+        digest = hash_token(token)
+        session_key = f"session:{digest}"
 
         # Fetch user_id before deleting so we can clean the index
         data = await redis.hgetall(session_key)
@@ -117,7 +124,8 @@ async def delete_session(redis: Redis, token: str) -> None:
         pipe = redis.pipeline()
         pipe.delete(session_key)
         if data and "user_id" in data:
-            pipe.srem(_user_index_key(int(data["user_id"])), token)
+            # Index set stores digests, not plain tokens
+            pipe.srem(_user_index_key(int(data["user_id"])), digest)
         await pipe.execute()
 
         logger.debug(f"Session deleted from Redis for token (user_id={data.get('user_id', '?')})")
@@ -144,8 +152,9 @@ async def delete_all_user_sessions(redis: Redis, user_id: int) -> int:
             return 0
 
         pipe = redis.pipeline()
-        for token in tokens:
-            pipe.delete(_session_key(token))
+        for digest in tokens:
+            # Index stores digests; key is already in "session:{digest}" form
+            pipe.delete(f"session:{digest}")
         pipe.delete(index_key)
         await pipe.execute()
 
