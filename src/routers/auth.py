@@ -35,14 +35,17 @@ from src.utils import (
     create_temp_token,
     generate_verification_code,
     hash_password,
+    hash_token,
     verify_password,
     send_verification_email,
     get_token_data,
     verify_admin_from_db,
 )
+from redis.asyncio import Redis
 from src.config.logger import get_logger
 from src.config.constants import UserType
-from src.database import get_db, Account, UserProfile, TempToken, RefreshToken
+from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
+from src.utils.session_utils import save_session, get_session, delete_session
 
 logger = get_logger(__name__)
 
@@ -133,7 +136,8 @@ async def _reset_password_with_code(
 async def login(
     login_data: LoginRequest,
     user_agent: str = Header(default="Unknown", alias="User-Agent"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     """
     User login endpoint
@@ -179,17 +183,26 @@ async def login(
         
         # Create refresh token and store in database
         refresh_token = create_temp_token()
+        token_hashed = hash_token(refresh_token)
         refresh_token_record = RefreshToken(
             user_id=user.user_id,
-            token_hashed=hash_password(refresh_token),
+            token_hashed=token_hashed,
             user_agent=user_agent[:100],  # Limit to 100 chars
             expire_at=datetime.now(timezone.utc) + timedelta(days=30)
         )
         db.add(refresh_token_record)
         await db.commit()
-        
+
+        # Cache session in Redis (non-fatal if Redis is unavailable)
+        await save_session(
+            redis,
+            token=refresh_token,
+            user_id=user.user_id,
+            user_agent=user_agent[:100],
+        )
+
         logger.info(f"Login successful for user: {email}")
-        
+
         return LoginResponse(
             id=user.user_id,
             name=user.user_name,
@@ -219,7 +232,8 @@ async def login(
 )
 async def logout(
     authorization: str = Header(..., alias="Authorization"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     """
     User logout endpoint - deletes the refresh token from database
@@ -237,26 +251,44 @@ async def logout(
         token = authorization.replace("Bearer ", "")
         
         logger.info("Logout attempt with token")
-        
-        # Find and delete the refresh token
-        result = await db.execute(
-            select(RefreshToken).where(RefreshToken.token_hashed == hash_password(token))
-        )
-        refresh_token_record = result.scalar_one_or_none()
-        
+
+        refresh_token_record = None
+
+        # 1. Try Redis cache first (key is HMAC-SHA256(token), same as DB token_hashed)
+        session_data = await get_session(redis, token)
+
+        if session_data:
+            # Cache hit: recompute digest to do exact DB query
+            result = await db.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hashed == hash_token(token)
+                )
+            )
+            refresh_token_record = result.scalar_one_or_none()
+
+        if not refresh_token_record:
+            # Cache miss: direct DB query using HMAC-SHA256 (O(1) index lookup)
+            result = await db.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hashed == hash_token(token)
+                )
+            )
+            refresh_token_record = result.scalar_one_or_none()
+
         if not refresh_token_record:
             logger.warning("Logout failed: Token not found")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"message": "Invalid or expired token"}
             )
-        
-        # Delete the refresh token
+
+        # Delete from DB and Redis
         await db.delete(refresh_token_record)
         await db.commit()
-        
+        await delete_session(redis, token)
+
         logger.info(f"Logout successful for user_id: {refresh_token_record.user_id}")
-        
+
         return LogoutResponse(message="Logged out successfully")
         
     except HTTPException:
