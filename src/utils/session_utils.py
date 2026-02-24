@@ -33,17 +33,20 @@ async def save_session(
     token: str,
     user_id: int,
     user_agent: str,
+    token_hashed: str = "",
     ttl_seconds: int = SESSION_TTL_SECONDS,
 ) -> None:
     """
     Store a session in Redis.
 
     Args:
-        redis:       Redis client
-        token:       Plain-text refresh token (used as cache key)
-        user_id:     User's ID
-        user_agent:  Client user-agent string
-        ttl_seconds: Time-to-live in seconds (default: 30 days)
+        redis:        Redis client
+        token:        Plain-text refresh token (used as cache key)
+        user_id:      User's ID
+        user_agent:   Client user-agent string
+        token_hashed: bcrypt hash stored in DB; kept here so logout can do
+                      an exact DB lookup instead of a full-table bcrypt scan
+        ttl_seconds:  Time-to-live in seconds (default: 30 days)
     """
     try:
         session_key = _session_key(token)
@@ -51,7 +54,14 @@ async def save_session(
 
         pipe = redis.pipeline()
         # Store session data as a hash
-        pipe.hset(session_key, mapping={"user_id": str(user_id), "user_agent": user_agent})
+        pipe.hset(
+            session_key,
+            mapping={
+                "user_id": str(user_id),
+                "user_agent": user_agent,
+                "token_hashed": token_hashed,
+            },
+        )
         pipe.expire(session_key, ttl_seconds)
         # Track this token under the user's index set
         pipe.sadd(index_key, token)
@@ -81,7 +91,8 @@ async def get_session(redis: Redis, token: str) -> Optional[dict]:
             return None
         return {
             "user_id": int(data["user_id"]),
-            "user_agent": data["user_agent"],
+            "user_agent": data.get("user_agent", ""),
+            "token_hashed": data.get("token_hashed", ""),
         }
     except Exception as e:
         logger.error(f"Failed to get session from Redis: {str(e)}")

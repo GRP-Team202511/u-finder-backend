@@ -9,6 +9,7 @@ from typing import Optional, Dict
 from fastapi import HTTPException, Header, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from redis.asyncio import Redis
 
 from src.config.settings import get_settings
 from src.config.constants import UserType
@@ -169,48 +170,80 @@ async def verify_user_from_db(user_id: int, db: AsyncSession):
     return user
 
 
-async def verify_refresh_token_from_db(token: str, db: AsyncSession):
+async def verify_refresh_token_from_db(
+    token: str,
+    db: AsyncSession,
+    redis: Optional[Redis] = None,
+):
     """
-    Verify refresh token exists in database and is not expired
-    
+    Verify a refresh token using Cache-Aside pattern.
+
+    Flow:
+      1. Check Redis cache (O(1)).
+      2. On cache miss: query PostgreSQL, then write back to Redis.
+      3. Validate expiry and user status in both paths.
+
     Args:
-        token: Refresh token string
-        db: Database session
-    
+        token: Plain-text refresh token
+        db:    Database session
+        redis: Optional Redis client; falls back to DB-only if None
+
     Returns:
         Tuple of (Account object, RefreshToken object)
-    
+
     Raises:
         HTTPException: If token invalid, expired, or user blocked
     """
     from src.database import Account, RefreshToken
     from src.utils.password_utils import verify_password
+    from src.utils.session_utils import get_session, save_session
     from datetime import datetime, timezone
-    
-    # Find refresh token in database
-    result = await db.execute(
-        select(RefreshToken).where(RefreshToken.token_hashed == token)
-    )
-    refresh_token_record = result.scalar_one_or_none()
-    
-    if not refresh_token_record:
-        # Try to verify against hashed token
+
+    refresh_token_record = None
+
+    # ── Step 1: Redis cache lookup ──────────────────────────────────────────
+    if redis is not None:
+        session_data = await get_session(redis, token)
+        if session_data and session_data.get("token_hashed"):
+            # Cache hit: use stored hash for exact DB query
+            result = await db.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hashed == session_data["token_hashed"]
+                )
+            )
+            refresh_token_record = result.scalar_one_or_none()
+
+    # ── Step 2: DB fallback (cache miss or Redis unavailable) ───────────────
+    if refresh_token_record is None:
         result = await db.execute(select(RefreshToken))
         all_tokens = result.scalars().all()
-        
-        refresh_token_record = None
         for rt in all_tokens:
             if verify_password(token, rt.token_hashed):
                 refresh_token_record = rt
                 break
-        
-        if not refresh_token_record:
+
+        if refresh_token_record is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"message": "Invalid or expired token"}
             )
-    
-    # Check if expired
+
+        # Write back to Redis so the next request is a cache hit
+        if redis is not None:
+            remaining = int(
+                (refresh_token_record.expire_at - datetime.now(timezone.utc)).total_seconds()
+            )
+            if remaining > 0:
+                await save_session(
+                    redis,
+                    token=token,
+                    user_id=refresh_token_record.user_id,
+                    user_agent=refresh_token_record.user_agent,
+                    token_hashed=refresh_token_record.token_hashed,
+                    ttl_seconds=remaining,
+                )
+
+    # ── Step 3: Expiry check ────────────────────────────────────────────────
     if datetime.now(timezone.utc) > refresh_token_record.expire_at:
         await db.delete(refresh_token_record)
         await db.commit()
@@ -218,25 +251,25 @@ async def verify_refresh_token_from_db(token: str, db: AsyncSession):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"message": "Invalid or expired token"}
         )
-    
-    # Get user account
+
+    # ── Step 4: Load and validate user ─────────────────────────────────────
     result = await db.execute(
         select(Account).where(Account.user_id == refresh_token_record.user_id)
     )
     user = result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"message": "User not found"}
         )
-    
+
     if user.is_blocked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"message": "Account is blocked"}
         )
-    
+
     return user, refresh_token_record
 
 

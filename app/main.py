@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import time
 import asyncio
 from src.database.connection import init_db, AsyncSessionLocal
+from src.database.redis_connection import init_redis, close_redis
 from src.config.logger import get_logger
 from src.routers import auth_router
 from src.config.settings import get_settings
@@ -57,7 +58,16 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Database initialization failed: {str(e)}")
         logger.warning("⚠️  Application will start without database connection")
         logger.warning("⚠️  Auth endpoints will not work until database is configured")
-    
+
+    # Initialize Redis
+    logger.info("Initializing Redis...")
+    try:
+        await init_redis()
+        logger.info("✅ Redis initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Redis initialization failed: {str(e)}")
+        logger.warning("⚠️  Application will start without Redis — session validation falls back to database")
+
     # Start background cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup())
     logger.info("🔄 Background cleanup task started")
@@ -72,7 +82,11 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("Background cleanup task stopped")
-    
+
+    # Close Redis connection
+    await close_redis()
+    logger.info("Redis connection closed")
+
     logger.info("=" * 50)
     logger.info("U-Finder Backend Application Shutdown")
     logger.info("=" * 50)
