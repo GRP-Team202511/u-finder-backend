@@ -19,6 +19,7 @@ from src.schemas.auth import (
     ResetPasswordResponse,
     VerifyResetCodeRequest,
     VerifyResetCodeResponse,
+    ResendSignupCodeResponse,
     ResendResetCodeResponse,
     RateLimitResponse,
     ConfirmResetPasswordRequest,
@@ -352,6 +353,104 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
         logger.warning(f"Failed to send verification email to {email}, but signup record created")
     
     return SignUpResponse(temp_token=temp_token)
+
+
+# ============ Resend Signup Verification Code ============
+@router.post(
+    "/signup/resend",
+    response_model=ResendSignupCodeResponse,
+    summary="Resend Signup Verification Code",
+    responses={
+        401: {"model": ErrorResponse, "description": "Token expired or invalid"},
+        429: {"model": RateLimitResponse, "description": "Too many requests"},
+    },
+)
+async def resend_signup_code(
+    temp_token: str = Header(..., alias="Temp-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Resend verification code to email for signup process.
+
+    - **Temp-Token**: Temporary token from /auth/signup endpoint (in header)
+
+    Returns success message if code is resent successfully.
+    """
+    logger.info("Resend signup verification code attempt")
+
+    # Look up the email_verify temp token
+    result = await db.execute(
+        select(TempToken).where(
+            TempToken.token_hashed == temp_token,
+            TempToken.token_type == "email_verify",
+        )
+    )
+    token_record = result.scalar_one_or_none()
+
+    if not token_record:
+        logger.warning("Resend signup code failed: Invalid temp token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"},
+        )
+
+    now = datetime.now(timezone.utc)
+
+    # Check if expired
+    if now > token_record.expire_at:
+        logger.warning("Resend signup code failed: Expired token")
+        await db.delete(token_record)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"},
+        )
+
+    # Rate limit: 60 seconds between resends
+    if token_record.created_at:
+        retry_after = 60 - int((now - token_record.created_at).total_seconds())
+        if retry_after > 0:
+            logger.warning("Resend signup code throttled")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many requests. Please wait before requesting again.",
+                    "retryAfter": retry_after,
+                },
+            )
+
+    # Get the associated (still blocked) account for name and email
+    result = await db.execute(
+        select(Account).where(Account.user_id == token_record.user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        logger.error(f"Resend signup code failed: User not found for user_id: {token_record.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"},
+        )
+
+    # Generate new code and send email
+    verification_code = generate_verification_code()
+    email_sent = await send_verification_email(
+        to_email=user.email,
+        verification_code=verification_code,
+        name=user.user_name,
+        email_type="signup",
+    )
+
+    if not email_sent:
+        logger.warning(f"Failed to resend signup verification email to {user.email}")
+
+    # Update created_at (rate-limit clock) and hash the new code
+    token_record.created_at = now
+    token_record.verification_code_hashed = hash_password(verification_code)
+    await db.commit()
+
+    logger.info(f"Signup verification code resent for user_id: {user.user_id}")
+    return ResendSignupCodeResponse(message="Verification code resent successfully")
 
 
 # ============ Verify Signup Email ============

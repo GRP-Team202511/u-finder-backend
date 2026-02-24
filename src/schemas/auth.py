@@ -82,6 +82,10 @@ class VerifyResetCodeResponse(BaseModel):
     message: str
 
 
+class ResendSignupCodeResponse(BaseModel):
+    message: str
+
+
 class ResendResetCodeResponse(BaseModel):
     message: str
 
