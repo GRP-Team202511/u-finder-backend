@@ -70,9 +70,11 @@ async def save_session(
             },
         )
         pipe.expire(session_key, ttl_seconds)
-        # Track this digest under the user's index set
+        # Track this digest under the user's index set.
+        # EXPIREGT only extends the TTL if the new value is greater than the
+        # current remaining TTL, preventing indefinite resets on active users.
         pipe.sadd(index_key, digest)
-        pipe.expire(index_key, _INDEX_TTL_SECONDS)
+        pipe.expiregt(index_key, _INDEX_TTL_SECONDS)
         await pipe.execute()
 
         logger.debug(f"Session saved to Redis for user_id={user_id}, ttl={ttl_seconds}s")
@@ -146,21 +148,35 @@ async def delete_all_user_sessions(redis: Redis, user_id: int) -> int:
     """
     try:
         index_key = _user_index_key(user_id)
-        tokens = await redis.smembers(index_key)
+        digests = await redis.smembers(index_key)
 
-        if not tokens:
+        if not digests:
             return 0
 
-        pipe = redis.pipeline()
-        for digest in tokens:
-            # Index stores digests; key is already in "session:{digest}" form
-            pipe.delete(f"session:{digest}")
-        pipe.delete(index_key)
-        await pipe.execute()
+        # Batch-check TTLs to separate live keys from stale digests whose
+        # session:{digest} keys have already been evicted by Redis TTL.
+        digests = list(digests)
+        ttl_pipe = redis.pipeline()
+        for d in digests:
+            ttl_pipe.ttl(f"session:{d}")
+        ttls = await ttl_pipe.execute()  # -2 means key does not exist
 
-        count = len(tokens)
-        logger.info(f"Deleted {count} Redis sessions for user_id={user_id}")
-        return count
+        live = [d for d, t in zip(digests, ttls) if t != -2]
+        stale = [d for d, t in zip(digests, ttls) if t == -2]
+
+        del_pipe = redis.pipeline()
+        for d in live:
+            del_pipe.delete(f"session:{d}")
+        if stale:
+            del_pipe.srem(index_key, *stale)
+        del_pipe.delete(index_key)
+        await del_pipe.execute()
+
+        logger.info(
+            f"Deleted {len(live)} Redis sessions for user_id={user_id} "
+            f"(cleaned up {len(stale)} stale index entries)"
+        )
+        return len(live)
     except Exception as e:
         logger.error(f"Failed to delete all sessions for user_id={user_id}: {str(e)}")
         return 0
