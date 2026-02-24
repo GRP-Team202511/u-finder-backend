@@ -215,12 +215,13 @@ async def verify_refresh_token_from_db(
 
     # ── Step 2: DB fallback (cache miss or Redis unavailable) ───────────────
     if refresh_token_record is None:
-        result = await db.execute(select(RefreshToken))
-        all_tokens = result.scalars().all()
-        for rt in all_tokens:
-            if verify_password(token, rt.token_hashed):
-                refresh_token_record = rt
-                break
+        from src.utils.password_utils import hash_token
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.token_hashed == hash_token(token)
+            )
+        )
+        refresh_token_record = result.scalar_one_or_none()
 
         if refresh_token_record is None:
             raise HTTPException(

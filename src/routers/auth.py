@@ -35,6 +35,7 @@ from src.utils import (
     create_temp_token,
     generate_verification_code,
     hash_password,
+    hash_token,
     verify_password,
     send_verification_email,
     get_token_data,
@@ -182,7 +183,7 @@ async def login(
         
         # Create refresh token and store in database
         refresh_token = create_temp_token()
-        token_hashed = hash_password(refresh_token)
+        token_hashed = hash_token(refresh_token)
         refresh_token_record = RefreshToken(
             user_id=user.user_id,
             token_hashed=token_hashed,
@@ -267,13 +268,13 @@ async def logout(
             refresh_token_record = result.scalar_one_or_none()
 
         if not refresh_token_record:
-            # Cache miss or record not found: full scan with bcrypt verify (fallback)
-            result = await db.execute(select(RefreshToken))
-            all_tokens = result.scalars().all()
-            for rt in all_tokens:
-                if verify_password(token, rt.token_hashed):
-                    refresh_token_record = rt
-                    break
+            # Cache miss: direct DB query using HMAC-SHA256 (O(1) index lookup)
+            result = await db.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hashed == hash_token(token)
+                )
+            )
+            refresh_token_record = result.scalar_one_or_none()
 
         if not refresh_token_record:
             logger.warning("Logout failed: Token not found")
