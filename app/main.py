@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 import time
 import asyncio
 from src.database.connection import init_db, AsyncSessionLocal
-from src.database.redis_connection import init_redis, close_redis
+from src.database.redis_connection import init_redis, close_redis, redis_client
 from src.config.logger import get_logger
 from src.routers import auth_router
 from src.config.settings import get_settings
@@ -29,7 +29,7 @@ async def periodic_cleanup():
             await asyncio.sleep(3600)  # Wait 1 hour
             logger.info("Running periodic cleanup of expired records...")
             async with AsyncSessionLocal() as db:
-                result = await cleanup_all_expired_records(db)
+                result = await cleanup_all_expired_records(db, redis=redis_client)
                 logger.info(f"Cleanup completed: {result}")
         except Exception as e:
             logger.error(f"Error in periodic cleanup: {str(e)}")
@@ -162,7 +162,7 @@ async def manual_cleanup():
     """Manually trigger cleanup of expired records"""
     logger.info("Manual cleanup triggered")
     async with AsyncSessionLocal() as db:
-        result = await cleanup_all_expired_records(db)
+        result = await cleanup_all_expired_records(db, redis=redis_client)
     logger.info(f"Manual cleanup completed: {result}")
     return {
         "status": "success",
