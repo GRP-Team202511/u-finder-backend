@@ -147,6 +147,7 @@ async def get_all_profile(
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
     summary="Update All Profile",
+    description="Update all user profile data including personal info and all profile sections",
 )
 async def update_all_profile(
     request: UpdateAllProfileRequest,
@@ -171,11 +172,13 @@ async def update_all_profile(
             profile = UserProfile(user_id=user_id)
             db.add(profile)
 
-        profile.basic_info = {
+        existing_basic_info = profile.basic_info or {}
+        existing_basic_info.update({
             "name": request.personalInfo.name,
             "gender": request.personalInfo.gender,
             "birthday": request.personalInfo.birthday,
-        }
+        })
+        profile.basic_info = existing_basic_info
         profile.education = request.education.data
         profile.academic = request.academic.data
         profile.test = request.test.data

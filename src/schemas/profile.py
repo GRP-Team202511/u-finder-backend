@@ -56,7 +56,13 @@ class ProfileSectionData(BaseModel):
 class PersonalInfoData(BaseModel):
     name: str
     gender: str
-    birthday: str
+    birthday: Optional[str] = None
+
+
+class PersonalInfoUpdateData(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    gender: str = Field(..., min_length=1, max_length=20)
+    birthday: str = Field(...)
 
 
 class AllProfileResponse(BaseModel):
@@ -71,7 +77,7 @@ class AllProfileResponse(BaseModel):
 
 
 class UpdateAllProfileRequest(BaseModel):
-    personalInfo: PersonalInfoData
+    personalInfo: PersonalInfoUpdateData
     education: ProfileSectionData
     academic: ProfileSectionData
     test: ProfileSectionData
