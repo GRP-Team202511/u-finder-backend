@@ -2,17 +2,18 @@
 U-Finder Backend Main Application
 FastAPI application entry point
 """
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import time
 import asyncio
 from src.database.connection import init_db, AsyncSessionLocal
-from src.database.redis_connection import init_redis, close_redis, redis_client
+from src.database.redis_connection import init_redis, close_redis
+from src.database import redis_connection
 from src.config.logger import get_logger
 from src.routers import auth_router
 from src.config.settings import get_settings
-from src.utils import cleanup_all_expired_records
+from src.utils import cleanup_all_expired_records, get_token_data, verify_admin_from_db
 
 # Initialize logger and settings
 logger = get_logger(__name__)
@@ -29,7 +30,7 @@ async def periodic_cleanup():
             await asyncio.sleep(3600)  # Wait 1 hour
             logger.info("Running periodic cleanup of expired records...")
             async with AsyncSessionLocal() as db:
-                result = await cleanup_all_expired_records(db, redis=redis_client)
+                result = await cleanup_all_expired_records(db, redis=redis_connection.redis_client)
                 logger.info(f"Cleanup completed: {result}")
         except Exception as e:
             logger.error(f"Error in periodic cleanup: {str(e)}")
@@ -100,10 +101,19 @@ app = FastAPI(
 )
 
 # CORS configuration from environment variables
+allow_origins = settings.cors_origins_list
+allow_credentials = settings.cors_credentials
+if allow_credentials and "*" in allow_origins:
+    logger.warning(
+        "CORS misconfiguration detected: wildcard origins with credentials enabled. "
+        "Disabling credentials for safety."
+    )
+    allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=settings.cors_credentials,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=settings.cors_methods.split(",") if settings.cors_methods != "*" else ["*"],
     allow_headers=settings.cors_headers.split(",") if settings.cors_headers != "*" else ["*"],
 )
@@ -158,11 +168,24 @@ async def health_check():
 
 # Admin endpoint for manual cleanup
 @app.post("/admin/cleanup", tags=["Admin"])
-async def manual_cleanup():
+async def manual_cleanup(
+    authorization: str = Header(..., alias="Authorization"),
+):
     """Manually trigger cleanup of expired records"""
     logger.info("Manual cleanup triggered")
+
+    token_data = get_token_data(authorization)
+
     async with AsyncSessionLocal() as db:
-        result = await cleanup_all_expired_records(db, redis=redis_client)
+        admin = await verify_admin_from_db(token_data["user_id"], db)
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Admin privileges required"},
+            )
+
+        result = await cleanup_all_expired_records(db, redis=redis_connection.redis_client)
+
     logger.info(f"Manual cleanup completed: {result}")
     return {
         "status": "success",

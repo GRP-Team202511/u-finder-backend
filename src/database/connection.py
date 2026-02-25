@@ -49,9 +49,9 @@ async def init_db():
     """Initialize database - create all tables"""
     try:
         async with engine.begin() as conn:
-            # Drop all existing tables and recreate them
-            # WARNING: This will delete all data! Use migrations in production
-            await conn.run_sync(Base.metadata.drop_all)
+            # Development-only reset: explicitly opt-in via settings.
+            if settings.is_development and settings.db_drop_all_on_startup:
+                await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
     except Exception as e:
         # Re-raise the exception to be handled by the caller
