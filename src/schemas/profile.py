@@ -48,6 +48,49 @@ class UpdateArrayProfileResponse(BaseModel):
     message: str
 
 
+# ============ All Profile ============
+class ProfileSectionData(BaseModel):
+    data: List[Dict[str, Any]]
+
+
+class PersonalInfoData(BaseModel):
+    name: str
+    gender: str
+    birthday: Optional[str] = None
+
+
+class PersonalInfoUpdateData(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    gender: str = Field(..., min_length=1, max_length=20)
+    birthday: str = Field(...)
+
+
+class AllProfileResponse(BaseModel):
+    personalInfo: PersonalInfoData
+    education: ProfileSectionData
+    academic: ProfileSectionData
+    test: ProfileSectionData
+    internship: ProfileSectionData
+    project: ProfileSectionData
+    campus: ProfileSectionData
+    award: ProfileSectionData
+
+
+class UpdateAllProfileRequest(BaseModel):
+    personalInfo: PersonalInfoUpdateData
+    education: ProfileSectionData
+    academic: ProfileSectionData
+    test: ProfileSectionData
+    internship: ProfileSectionData
+    project: ProfileSectionData
+    campus: ProfileSectionData
+    award: ProfileSectionData
+
+
+class UpdateAllProfileResponse(BaseModel):
+    message: str
+
+
 # ============ Common ============
 class ErrorResponse(BaseModel):
     message: str

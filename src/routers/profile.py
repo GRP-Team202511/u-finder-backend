@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Header, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from redis.asyncio import Redis
+from typing import Optional, Any
 
 from src.schemas.profile import (
     PersonalInfoResponse,
@@ -14,6 +15,11 @@ from src.schemas.profile import (
     ArrayProfileResponse,
     UpdateArrayProfileRequest,
     UpdateArrayProfileResponse,
+    AllProfileResponse,
+    UpdateAllProfileRequest,
+    UpdateAllProfileResponse,
+    ProfileSectionData,
+    PersonalInfoData,
     ErrorResponse,
     VALID_ARRAY_FIELDS,
     FIELD_DISPLAY_NAMES,
@@ -31,7 +37,7 @@ router = APIRouter(prefix="/profile", tags=["Profile"])
 async def _get_current_user_id(
     authorization: str,
     db: AsyncSession,
-    redis: Redis,
+    redis: Optional[Redis],
 ) -> int:
     """
     Extract and verify the refresh token from Authorization header.
@@ -46,9 +52,10 @@ async def _get_current_user_id(
     token = authorization.replace("Bearer ", "")
 
     # 1. Try Redis cache first
-    session_data = await get_session(redis, token)
-    if session_data:
-        return int(session_data["user_id"])
+    if redis is not None:
+        session_data = await get_session(redis, token)
+        if session_data:
+            return int(session_data["user_id"])
 
     # 2. Fallback to database
     result = await db.execute(
@@ -67,6 +74,135 @@ async def _get_current_user_id(
     return refresh_record.user_id
 
 
+def _safe_array_data(value: Any) -> list[dict]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("data"), list):
+        return value["data"]
+    return []
+
+
+@router.get(
+    "",
+    response_model=AllProfileResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "Profile not found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Get All Profile",
+    description="Return all user's profile",
+)
+async def get_all_profile(
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        result = await db.execute(select(Account).where(Account.user_id == user_id))
+        account = result.scalar_one_or_none()
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Profile not found"},
+            )
+
+        result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+        profile = result.scalar_one_or_none()
+        basic_info = (profile.basic_info or {}) if profile else {}
+
+        return AllProfileResponse(
+            personalInfo=PersonalInfoData(
+                name=basic_info.get("name") or account.user_name,
+                gender=basic_info.get("gender") or "",
+                birthday=basic_info.get("birthday") or "",
+            ),
+            education=ProfileSectionData(data=_safe_array_data(profile.education if profile else None)),
+            academic=ProfileSectionData(data=_safe_array_data(profile.academic if profile else None)),
+            test=ProfileSectionData(data=_safe_array_data(profile.test if profile else None)),
+            internship=ProfileSectionData(data=_safe_array_data(profile.internship if profile else None)),
+            project=ProfileSectionData(data=_safe_array_data(profile.project if profile else None)),
+            campus=ProfileSectionData(data=_safe_array_data(profile.campus if profile else None)),
+            award=ProfileSectionData(data=_safe_array_data(profile.award if profile else None)),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get all profile error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.put(
+    "",
+    response_model=UpdateAllProfileResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "Profile data not found", "model": ErrorResponse},
+        422: {"description": "Validation error", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Update All Profile",
+    description="Update all user profile data including personal info and all profile sections",
+)
+async def update_all_profile(
+    request: UpdateAllProfileRequest,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        result = await db.execute(select(Account).where(Account.user_id == user_id))
+        account = result.scalar_one_or_none()
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Profile data not found"},
+            )
+
+        result = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+        profile = result.scalar_one_or_none()
+        if not profile:
+            profile = UserProfile(user_id=user_id)
+            db.add(profile)
+
+        existing_basic_info = profile.basic_info or {}
+        existing_basic_info.update({
+            "name": request.personalInfo.name,
+            "gender": request.personalInfo.gender,
+            "birthday": request.personalInfo.birthday,
+        })
+        profile.basic_info = existing_basic_info
+        profile.education = request.education.data
+        profile.academic = request.academic.data
+        profile.test = request.test.data
+        profile.internship = request.internship.data
+        profile.project = request.project.data
+        profile.campus = request.campus.data
+        profile.award = request.award.data
+
+        account.user_name = request.personalInfo.name
+
+        await db.commit()
+        logger.info(f"All profile updated for user {user_id}")
+        return UpdateAllProfileResponse(message="All profiles updated successfully")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update all profile error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
 @router.get(
     "/personal",
     response_model=PersonalInfoResponse,
@@ -80,7 +216,7 @@ async def _get_current_user_id(
 async def get_personal_info(
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """
     Get the authenticated user's personal info (name, gender, birthday).
@@ -142,7 +278,7 @@ async def update_personal_info(
     request: UpdatePersonalInfoRequest,
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """
     Update the authenticated user's personal info (name, gender, birthday).
@@ -220,7 +356,7 @@ async def get_array_profile(
     field: str,
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """
     Get the authenticated user's array-type profile data for the specified field.
@@ -287,7 +423,7 @@ async def update_array_profile(
     request: UpdateArrayProfileRequest,
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """
     Update the authenticated user's array-type profile data for the specified field.
