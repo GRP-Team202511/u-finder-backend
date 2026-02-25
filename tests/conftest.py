@@ -1,0 +1,152 @@
+"""
+Global pytest configuration and fixtures.
+- Uses a standalone test app (no real DB/Redis connections triggered)
+- Injects mock DB and mock Redis via FastAPI dependency_overrides
+"""
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from fastapi import FastAPI
+from httpx import AsyncClient, ASGITransport
+
+from src.routers import auth_router
+from src.database.connection import get_db
+from src.database.redis_connection import get_redis
+
+
+# ──────────────────────────────────────────────
+# Standalone test app (avoids main.py lifespan connecting to real DB/Redis)
+# ──────────────────────────────────────────────
+def build_test_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(auth_router)
+    return app
+
+
+# ──────────────────────────────────────────────
+# Mock DB Session Fixture
+# ──────────────────────────────────────────────
+@pytest.fixture
+def mock_db():
+    """
+    Returns an AsyncMock simulating an AsyncSession.
+
+    Default behaviour:
+    - execute() result's .scalar_one_or_none() returns None
+    - commit(), delete(), refresh() complete without raising
+
+    Override in individual tests:
+        mock_db.execute.return_value.scalar_one_or_none.return_value = fake_user
+    """
+    session = AsyncMock()
+
+    # Default: execute() result's scalar_one_or_none() returns None
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = None
+    session.execute.return_value = execute_result
+
+    # session.add() is synchronous in SQLAlchemy — use MagicMock to avoid
+    # "coroutine never awaited" warnings when the router calls db.add(...)
+    session.add = MagicMock()
+
+    return session
+
+
+# ──────────────────────────────────────────────
+# Mock Redis Fixture
+# ──────────────────────────────────────────────
+@pytest.fixture
+def mock_redis():
+    """
+    Returns an AsyncMock simulating a Redis client.
+
+    Default behaviour:
+    - get() returns None (cache miss)
+    - set(), delete() complete without raising
+    """
+    redis = AsyncMock()
+    redis.get.return_value = None
+    return redis
+
+
+# ──────────────────────────────────────────────
+# HTTP Test Client Fixture
+# ──────────────────────────────────────────────
+@pytest.fixture
+async def client(mock_db, mock_redis):
+    """
+    Returns an httpx.AsyncClient with mock DB and mock Redis injected.
+
+    Usage example:
+        async def test_something(client, mock_db):
+            mock_db.execute.return_value.scalar_one_or_none.return_value = fake_user
+            response = await client.post("/auth/login", json={...})
+            assert response.status_code == 200
+    """
+    app = build_test_app()
+
+    async def override_get_db():
+        yield mock_db
+
+    async def override_get_redis():
+        yield mock_redis
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = override_get_redis
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as ac:
+        yield ac
+
+
+# ──────────────────────────────────────────────
+# Fake Data Factories
+# ──────────────────────────────────────────────
+@pytest.fixture
+def fake_account():
+    """Returns a mock Account ORM object."""
+    account = MagicMock()
+    account.user_id = 1
+    account.user_name = "Test User"
+    account.email = "test@example.com"
+    account.password_hashed = "$2b$12$placeholder_hashed_password"
+    account.user_type = 1
+    account.is_blocked = False
+    account.is_2fa_enabled = False
+    account.passkey_enabled = False
+    account.created_at = MagicMock()
+    account.created_at.isoformat.return_value = "2026-01-01T00:00:00+00:00"
+    account.updated_at = MagicMock()
+    account.updated_at.isoformat.return_value = "2026-01-01T00:00:00+00:00"
+    return account
+
+
+@pytest.fixture
+def fake_temp_token():
+    """Returns a mock TempToken ORM object (default type: email_verify)."""
+    from datetime import datetime, timedelta, timezone
+
+    token = MagicMock()
+    token.id = 1
+    token.user_id = 1
+    token.token_hashed = "fake-temp-token-value"
+    token.token_type = "email_verify"
+    token.verification_code_hashed = "$2b$12$placeholder_code_hash"
+    token.expire_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    token.created_at = datetime.now(timezone.utc) - timedelta(seconds=120)  # created 2 minutes ago
+    return token
+
+
+@pytest.fixture
+def fake_refresh_token():
+    """Returns a mock RefreshToken ORM object."""
+    from datetime import datetime, timedelta, timezone
+
+    rt = MagicMock()
+    rt.id = 1
+    rt.user_id = 1
+    rt.token_hashed = "fake-hashed-refresh-token"
+    rt.user_agent = "pytest"
+    rt.expire_at = datetime.now(timezone.utc) + timedelta(days=30)
+    return rt
