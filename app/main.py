@@ -10,7 +10,7 @@ import asyncio
 from src.database.connection import init_db, AsyncSessionLocal
 from src.database.redis_connection import init_redis, close_redis, redis_client
 from src.config.logger import get_logger
-from src.routers import auth_router
+from src.routers import auth_router, profile_router
 from src.config.settings import get_settings
 from src.utils import cleanup_all_expired_records
 
@@ -135,6 +135,7 @@ async def log_requests(request: Request, call_next):
 
 # Include routers
 app.include_router(auth_router)
+app.include_router(profile_router)
 
 
 # Root path
