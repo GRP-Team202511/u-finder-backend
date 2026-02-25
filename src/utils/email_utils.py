@@ -97,7 +97,7 @@ Welcome to U-Finder! Thank you for signing up.
 
 Your verification code is: {verification_code}
 
-This code will expire in 24 hours. Please enter this code to complete your registration.
+This code will expire in 5 minutes. Please enter this code to complete your registration.
 
 If you didn't sign up for U-Finder, please ignore this email.
 
@@ -112,7 +112,7 @@ We received a request to reset your password for your U-Finder account.
 
 Your password reset code is: {verification_code}
 
-This code will expire in 1 hour. Please enter this code to reset your password.
+This code will expire in 5 minutes. Please enter this code to reset your password.
 
 If you didn't request a password reset, please ignore this email or contact support if you have concerns.
 
