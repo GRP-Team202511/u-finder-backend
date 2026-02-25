@@ -11,7 +11,12 @@ from src.schemas.profile import (
     PersonalInfoResponse,
     UpdatePersonalInfoRequest,
     UpdatePersonalInfoResponse,
+    ArrayProfileResponse,
+    UpdateArrayProfileRequest,
+    UpdateArrayProfileResponse,
     ErrorResponse,
+    VALID_ARRAY_FIELDS,
+    FIELD_DISPLAY_NAMES,
 )
 from src.config.logger import get_logger
 from src.database import get_db, get_redis, Account, UserProfile, RefreshToken
@@ -193,6 +198,136 @@ async def update_personal_info(
         raise
     except Exception as e:
         logger.error(f"Update personal info error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.get(
+    "/array/{field}",
+    response_model=ArrayProfileResponse,
+    responses={
+        400: {"description": "Invalid field", "model": ErrorResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "Profile data not found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Get Other Profile",
+)
+async def get_array_profile(
+    field: str,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+):
+    """
+    Get the authenticated user's array-type profile data for the specified field.
+
+    **Requires**: Bearer token (refresh token) in Authorization header.
+
+    **Field** must be one of: education, academic, test, internship, project, campus, award
+    """
+    # Validate field
+    if field not in VALID_ARRAY_FIELDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": f"Invalid field. Must be one of: {', '.join(sorted(VALID_ARRAY_FIELDS))}"},
+        )
+
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        # Fetch profile
+        result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        )
+        profile = result.scalar_one_or_none()
+
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Profile data not found"},
+            )
+
+        field_data = getattr(profile, field, None)
+        if field_data is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Profile data not found"},
+            )
+
+        return ArrayProfileResponse(data=field_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get array profile ({field}) error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.put(
+    "/array/{field}",
+    response_model=UpdateArrayProfileResponse,
+    responses={
+        400: {"description": "Invalid field", "model": ErrorResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "User profile not found", "model": ErrorResponse},
+        422: {"description": "Validation error", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Update Other Profile",
+)
+async def update_array_profile(
+    field: str,
+    request: UpdateArrayProfileRequest,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+):
+    """
+    Update the authenticated user's array-type profile data for the specified field.
+
+    **Requires**: Bearer token (refresh token) in Authorization header.
+
+    **Field** must be one of: education, academic, test, internship, project, campus, award
+    """
+    # Validate field
+    if field not in VALID_ARRAY_FIELDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": f"Invalid field. Must be one of: {', '.join(sorted(VALID_ARRAY_FIELDS))}"},
+        )
+
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        # Fetch or create profile
+        result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        )
+        profile = result.scalar_one_or_none()
+
+        if not profile:
+            profile = UserProfile(user_id=user_id)
+            db.add(profile)
+
+        setattr(profile, field, request.data)
+
+        await db.commit()
+        display_name = FIELD_DISPLAY_NAMES.get(field, field.capitalize())
+        logger.info(f"{display_name} updated for user {user_id}")
+
+        return UpdateArrayProfileResponse(message=f"{display_name} saved successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update array profile ({field}) error: {str(e)}")
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

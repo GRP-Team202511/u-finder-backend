@@ -55,11 +55,9 @@ async def close_redis() -> None:
         logger.info("Redis connection closed")
 
 
-async def get_redis() -> AsyncGenerator[Redis, None]:
+async def get_redis() -> AsyncGenerator[Optional[Redis], None]:
     """
     FastAPI dependency for getting the Redis client.
     Reuses the global connection pool.
     """
-    if redis_client is None:
-        raise RuntimeError("Redis client is not initialized. Call init_redis() first.")
     yield redis_client

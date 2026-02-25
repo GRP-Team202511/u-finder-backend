@@ -4,6 +4,7 @@ Contains authentication related endpoints such as user login
 """
 from fastapi import APIRouter, HTTPException, Header, status, Depends
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -62,10 +63,12 @@ async def _reset_password_with_code(
     """
     logger.info("Password reset confirmation attempt with temp_token")
     
+    temp_token_hashed = hash_token(temp_token)
+
     # Check if temp token exists with correct type
     result = await db.execute(
         select(TempToken).where(
-            TempToken.token_hashed == temp_token,
+            TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == "password_reset"
         )
     )
@@ -137,7 +140,7 @@ async def login(
     login_data: LoginRequest,
     user_agent: str = Header(default="Unknown", alias="User-Agent"),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """
     User login endpoint
@@ -233,7 +236,7 @@ async def login(
 async def logout(
     authorization: str = Header(..., alias="Authorization"),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """
     User logout endpoint - deletes the refresh token from database
@@ -363,7 +366,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     # Create temp token for email verification with hashed verification code
     temp_token_record = TempToken(
         user_id=new_account.user_id,
-        token_hashed=temp_token,
+        token_hashed=hash_token(temp_token),
         token_type="email_verify",
         verification_code_hashed=hash_password(verification_code),  # Hash the verification code
         expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
@@ -410,10 +413,12 @@ async def resend_signup_code(
     """
     logger.info("Resend signup verification code attempt")
 
+    temp_token_hashed = hash_token(temp_token)
+
     # Look up the email_verify temp token
     result = await db.execute(
         select(TempToken).where(
-            TempToken.token_hashed == temp_token,
+            TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == "email_verify",
         )
     )
@@ -501,11 +506,13 @@ async def _verify_signup_email_impl(
     Returns JWT token on successful verification and activates the user account
     """
     logger.info(f"Signup email verification attempt with temp_token")
+
+    temp_token_hashed = hash_token(temp_token)
     
     # Check if temp token exists with correct type
     result = await db.execute(
         select(TempToken).where(
-            TempToken.token_hashed == temp_token,
+            TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == "email_verify"
         )
     )
@@ -671,7 +678,7 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     # Create password reset record with hashed verification code
     reset_record = TempToken(
         user_id=user.user_id,
-        token_hashed=temp_token,
+        token_hashed=hash_token(temp_token),
         token_type="password_reset",
         verification_code_hashed=hash_password(reset_code),  # Hash the reset code
         expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
@@ -717,11 +724,13 @@ async def verify_reset_code(
     Returns success message if code is valid. Use confirm-reset-password to actually change the password.
     """
     logger.info(f"Password reset code verification attempt with temp_token")
+
+    temp_token_hashed = hash_token(temp_token)
     
     # Check if temp token exists with correct type
     result = await db.execute(
         select(TempToken).where(
-            TempToken.token_hashed == temp_token,
+            TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == "password_reset"
         )
     )
@@ -780,10 +789,12 @@ async def resend_reset_code(
     """
     logger.info("Resend reset code attempt with temp-token")
 
+    temp_token_hashed = hash_token(temp_token)
+
     # Check if temp token exists with correct type
     result = await db.execute(
         select(TempToken).where(
-            TempToken.token_hashed == temp_token,
+            TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == "password_reset",
         )
     )

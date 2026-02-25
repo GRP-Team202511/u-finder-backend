@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     # Database Settings
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/dbname"
+    db_drop_all_on_startup: bool = False
 
     # API Keys & Secrets
     secret_key: str = "your-secret-key-change-in-production"
