@@ -366,7 +366,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
         token_hashed=temp_token,
         token_type="email_verify",
         verification_code_hashed=hash_password(verification_code),  # Hash the verification code
-        expire_at=datetime.now(timezone.utc) + timedelta(hours=24)  # 24 hour expiry
+        expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
     )
     
     db.add(temp_token_record)
@@ -567,7 +567,7 @@ async def _verify_signup_email_impl(
     refresh_token = create_temp_token()
     refresh_token_record = RefreshToken(
         user_id=user.user_id,
-        token_hashed=hash_password(refresh_token),
+        token_hashed=hash_token(refresh_token),
         user_agent=user_agent[:100],  # Limit to 100 chars
         expire_at=datetime.now(timezone.utc) + timedelta(days=30)
     )
@@ -674,7 +674,7 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
         token_hashed=temp_token,
         token_type="password_reset",
         verification_code_hashed=hash_password(reset_code),  # Hash the reset code
-        expire_at=datetime.now(timezone.utc) + timedelta(hours=1)  # 1 hour expiry
+        expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
     )
     
     db.add(reset_record)
