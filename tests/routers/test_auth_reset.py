@@ -9,6 +9,16 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from src.utils.password_utils import hash_password
+from tests.routers.utils.response_asserts import (
+    assert_message_response,
+    assert_rate_limit_response,
+    assert_reset_200,
+    assert_reset_verify_200,
+    assert_token_expired_response,
+    assert_token_invalid_response,
+    assert_validation_error,
+    assert_wrong_verification_code_response,
+)
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -70,10 +80,7 @@ class TestResetPassword:
         response = await client.post(RESET_URL, json={"email": "test@example.com"})
 
         assert response.status_code == 200
-        body = response.json()
-        assert "temp_token" in body
-        assert isinstance(body["temp_token"], str)
-        assert len(body["temp_token"]) > 0
+        assert_reset_200(response.json())
 
     async def test_reset_email_not_found(self, client, mock_db):
         """Unknown email must return 404."""
@@ -82,17 +89,19 @@ class TestResetPassword:
         response = await client.post(RESET_URL, json={"email": "nobody@example.com"})
 
         assert response.status_code == 404
-        assert response.json()["detail"]["message"] == "No account record for this email"
+        assert_message_response(response.json(), "No account record for this email")
 
     async def test_reset_invalid_email_format(self, client):
         """Malformed email must return 422."""
         response = await client.post(RESET_URL, json={"email": "not-an-email"})
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     async def test_reset_missing_email_field(self, client):
         """Missing email field must return 422."""
         response = await client.post(RESET_URL, json={})
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
 
 # ── POST /auth/reset/verify ───────────────────────────────────────────────────
@@ -112,7 +121,7 @@ class TestResetVerify:
         )
 
         assert response.status_code == 200
-        assert response.json()["message"] == "Password reset successfully"
+        assert_reset_verify_200(response.json())
 
     async def test_reset_verify_invalid_token(self, client, mock_db):
         """Token not found must return 401."""
@@ -125,7 +134,7 @@ class TestResetVerify:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Wrong code or expired token"
+        assert_token_expired_response(response.json())
 
     async def test_reset_verify_expired_token(self, client, mock_db):
         """Expired token must return 401."""
@@ -139,7 +148,7 @@ class TestResetVerify:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Wrong code or expired token"
+        assert_token_expired_response(response.json())
 
     async def test_reset_verify_wrong_code(self, client, mock_db):
         """Mismatched code must return 401."""
@@ -153,7 +162,7 @@ class TestResetVerify:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Wrong code or expired token"
+        assert_wrong_verification_code_response(response.json())
 
     async def test_reset_verify_weak_new_password(self, client):
         """New password failing strength rules must return 422 (Pydantic)."""
@@ -163,11 +172,13 @@ class TestResetVerify:
             headers={"Temp-Token": "fake-reset-token"},
         )
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     async def test_reset_verify_missing_temp_token_header(self, client):
         """Missing Temp-Token header must return 422."""
         response = await client.post(RESET_VERIFY_URL, json=VALID_RESET_VERIFY_PAYLOAD)
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
 
 # ── POST /auth/reset/resend ───────────────────────────────────────────────────
@@ -185,7 +196,7 @@ class TestResendResetCode:
         response = await client.post(RESET_RESEND_URL, headers={"Temp-Token": "fake-reset-token"})
 
         assert response.status_code == 200
-        assert response.json()["message"] == "Verification code resent successfully"
+        assert_message_response(response.json(), "Verification code resent successfully")
 
     async def test_resend_invalid_token(self, client, mock_db):
         """Unknown token must return 401."""
@@ -194,7 +205,7 @@ class TestResendResetCode:
         response = await client.post(RESET_RESEND_URL, headers={"Temp-Token": "bad-token"})
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Token expired or invalid"
+        assert_token_invalid_response(response.json())
 
     async def test_resend_expired_token(self, client, mock_db):
         """Expired token must return 401."""
@@ -204,7 +215,7 @@ class TestResendResetCode:
         response = await client.post(RESET_RESEND_URL, headers={"Temp-Token": "fake-reset-token"})
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Token expired or invalid"
+        assert_token_invalid_response(response.json())
 
     async def test_resend_rate_limited(self, client, mock_db):
         """Request within 60 s of last send must return 429 with retryAfter."""
@@ -216,11 +227,10 @@ class TestResendResetCode:
         response = await client.post(RESET_RESEND_URL, headers={"Temp-Token": "fake-reset-token"})
 
         assert response.status_code == 429
-        body = response.json()
-        assert "retryAfter" in body["detail"]
-        assert body["detail"]["retryAfter"] > 0
+        assert_rate_limit_response(response.json())
 
     async def test_resend_missing_temp_token_header(self, client):
         """Missing Temp-Token header must return 422."""
         response = await client.post(RESET_RESEND_URL)
         assert response.status_code == 422
+        assert_validation_error(response.json())

@@ -4,6 +4,11 @@ Router tests for POST /auth/login
 import pytest
 from unittest.mock import patch, AsyncMock
 from src.utils.password_utils import hash_password
+from tests.routers.utils.response_asserts import (
+    assert_login_200,
+    assert_message_response,
+    assert_validation_error,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -45,10 +50,9 @@ class TestLogin:
 
         assert response.status_code == 200
         body = response.json()
+        assert_login_200(body)
         assert body["id"] == user.user_id
         assert body["name"] == user.user_name
-        assert "token" in body
-        assert isinstance(body["token"], str)
 
     async def test_login_user_not_found(self, client, mock_db):
         """Unknown email must return 404."""
@@ -57,7 +61,7 @@ class TestLogin:
         response = await client.post(LOGIN_URL, json=VALID_PAYLOAD)
 
         assert response.status_code == 404
-        assert response.json()["detail"]["message"] == "User not found"
+        assert_message_response(response.json(), "User not found")
 
     @patch("src.routers.auth.save_session", new_callable=AsyncMock)
     async def test_login_wrong_password(self, mock_save_session, client, mock_db):
@@ -70,7 +74,7 @@ class TestLogin:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Incorrect password"
+        assert_message_response(response.json(), "Incorrect password")
 
     @patch("src.routers.auth.save_session", new_callable=AsyncMock)
     async def test_login_blocked_account(self, mock_save_session, client, mock_db):
@@ -81,7 +85,7 @@ class TestLogin:
         response = await client.post(LOGIN_URL, json=VALID_PAYLOAD)
 
         assert response.status_code == 403
-        assert response.json()["detail"]["message"] == "Account is blocked"
+        assert_message_response(response.json(), "Account is blocked")
 
     async def test_login_invalid_email_format(self, client):
         """A malformed email must return 422 (Pydantic validation)."""
@@ -89,16 +93,19 @@ class TestLogin:
             LOGIN_URL, json={"email": "not-an-email", "password": "Password1"}
         )
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     async def test_login_missing_password(self, client):
         """Missing password field must return 422."""
         response = await client.post(LOGIN_URL, json={"email": "test@example.com"})
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     async def test_login_missing_email(self, client):
         """Missing email field must return 422."""
         response = await client.post(LOGIN_URL, json={"password": "Password1"})
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     @patch("src.routers.auth.save_session", new_callable=AsyncMock)
     async def test_login_email_case_insensitive(self, mock_save_session, client, mock_db):
@@ -111,3 +118,7 @@ class TestLogin:
         )
 
         assert response.status_code == 200
+        body = response.json()
+        assert_login_200(body)
+        assert body["id"] == user.user_id
+        assert body["name"] == user.user_name

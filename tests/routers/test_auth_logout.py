@@ -3,6 +3,11 @@ Router tests for POST /auth/logout
 """
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
+from tests.routers.utils.response_asserts import (
+    assert_detail_message_response,
+    assert_message_response,
+    assert_validation_error,
+)
 
 
 LOGOUT_URL = "/auth/logout"
@@ -35,7 +40,7 @@ class TestLogout:
         )
 
         assert response.status_code == 200
-        assert response.json()["message"] == "Logged out successfully"
+        assert_message_response(response.json(), "Logged out successfully")
 
     @patch("src.routers.auth.delete_session", new_callable=AsyncMock)
     @patch("src.routers.auth.get_session", new_callable=AsyncMock, return_value={"user_id": "1"})
@@ -52,7 +57,7 @@ class TestLogout:
         )
 
         assert response.status_code == 200
-        assert response.json()["message"] == "Logged out successfully"
+        assert_message_response(response.json(), "Logged out successfully")
 
     @patch("src.routers.auth.delete_session", new_callable=AsyncMock)
     @patch("src.routers.auth.get_session", new_callable=AsyncMock, return_value=None)
@@ -67,7 +72,7 @@ class TestLogout:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Invalid or expired token"
+        assert_detail_message_response(response.json(), "Invalid or expired token")
 
     async def test_logout_invalid_header_format(self, client):
         """Authorization header without 'Bearer ' prefix must return 401."""
@@ -76,9 +81,10 @@ class TestLogout:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Invalid authorization header format"
+        assert_detail_message_response(response.json(), "Invalid authorization header format")
 
     async def test_logout_missing_authorization_header(self, client):
         """Missing Authorization header must return 422 (required header)."""
         response = await client.post(LOGOUT_URL)
         assert response.status_code == 422
+        assert_validation_error(response.json())

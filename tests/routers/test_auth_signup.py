@@ -9,6 +9,15 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from src.utils.password_utils import hash_password
+from tests.routers.utils.response_asserts import (
+    assert_login_200,
+    assert_message_response,
+    assert_rate_limit_response,
+    assert_signup_200,
+    assert_token_invalid_response,
+    assert_validation_error,
+    assert_wrong_code_response,
+)
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -79,10 +88,7 @@ class TestSignup:
         response = await client.post(SIGNUP_URL, json=VALID_SIGNUP_PAYLOAD)
 
         assert response.status_code == 200
-        body = response.json()
-        assert "temp_token" in body
-        assert isinstance(body["temp_token"], str)
-        assert len(body["temp_token"]) > 0
+        assert_signup_200(response.json())
 
     @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=True)
     async def test_signup_duplicate_email(self, mock_email, client, mock_db):
@@ -92,7 +98,7 @@ class TestSignup:
         response = await client.post(SIGNUP_URL, json=VALID_SIGNUP_PAYLOAD)
 
         assert response.status_code == 409
-        assert response.json()["detail"]["message"] == "Account exists"
+        assert_message_response(response.json(), "Account exists")
 
     async def test_signup_weak_password_no_digit(self, client):
         """Password with no digits must be rejected with 422."""
@@ -100,6 +106,7 @@ class TestSignup:
             SIGNUP_URL, json={**VALID_SIGNUP_PAYLOAD, "password": "OnlyLetters"}
         )
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     async def test_signup_weak_password_no_letter(self, client):
         """Password with only digits must be rejected with 422."""
@@ -107,6 +114,7 @@ class TestSignup:
             SIGNUP_URL, json={**VALID_SIGNUP_PAYLOAD, "password": "12345678"}
         )
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     async def test_signup_invalid_email(self, client):
         """Malformed email must be rejected with 422."""
@@ -114,6 +122,7 @@ class TestSignup:
             SIGNUP_URL, json={**VALID_SIGNUP_PAYLOAD, "email": "not-an-email"}
         )
         assert response.status_code == 422
+        assert_validation_error(response.json())
 
     @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=True)
     async def test_signup_email_normalised_to_lowercase(self, mock_email, client, mock_db):
@@ -125,6 +134,7 @@ class TestSignup:
         )
 
         assert response.status_code == 200
+        assert_signup_200(response.json())
 
 
 # ── POST /auth/verify ─────────────────────────────────────────────────────────
@@ -145,9 +155,9 @@ class TestVerifySignupEmail:
 
         assert response.status_code == 201
         body = response.json()
+        assert_login_200(body)
         assert body["id"] == user.user_id
         assert body["name"] == user.user_name
-        assert "token" in body
 
     async def test_verify_invalid_temp_token(self, client, mock_db):
         """Token not found in DB must return 401."""
@@ -160,7 +170,7 @@ class TestVerifySignupEmail:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Wrong code"
+        assert_wrong_code_response(response.json())
 
     async def test_verify_expired_token(self, client, mock_db):
         """Expired temp token must return 401."""
@@ -174,7 +184,7 @@ class TestVerifySignupEmail:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Wrong code"
+        assert_wrong_code_response(response.json())
 
     async def test_verify_wrong_code(self, client, mock_db):
         """Mismatched verification code must return 401."""
@@ -188,7 +198,7 @@ class TestVerifySignupEmail:
         )
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Wrong code"
+        assert_wrong_code_response(response.json())
 
     async def test_verify_user_not_found(self, client, mock_db):
         """Valid token/code but missing Account record must return 404."""
@@ -203,7 +213,7 @@ class TestVerifySignupEmail:
         )
 
         assert response.status_code == 404
-        assert response.json()["detail"]["message"] == "User not found"
+        assert_message_response(response.json(), "User not found")
 
 
 # ── POST /auth/signup/resend ──────────────────────────────────────────────────
@@ -221,7 +231,7 @@ class TestResendSignupCode:
         response = await client.post(RESEND_URL, headers={"Temp-Token": "fake-temp-token"})
 
         assert response.status_code == 200
-        assert response.json()["message"] == "Verification code resent successfully"
+        assert_message_response(response.json(), "Verification code resent successfully")
 
     async def test_resend_invalid_token(self, client, mock_db):
         """Unknown token must return 401."""
@@ -230,7 +240,7 @@ class TestResendSignupCode:
         response = await client.post(RESEND_URL, headers={"Temp-Token": "invalid-token"})
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Token expired or invalid"
+        assert_token_invalid_response(response.json())
 
     async def test_resend_expired_token(self, client, mock_db):
         """Expired token must return 401."""
@@ -240,7 +250,7 @@ class TestResendSignupCode:
         response = await client.post(RESEND_URL, headers={"Temp-Token": "fake-temp-token"})
 
         assert response.status_code == 401
-        assert response.json()["detail"]["message"] == "Token expired or invalid"
+        assert_token_invalid_response(response.json())
 
     async def test_resend_rate_limited(self, client, mock_db):
         """Request within 60 s of last send must return 429 with retryAfter."""
@@ -252,6 +262,4 @@ class TestResendSignupCode:
         response = await client.post(RESEND_URL, headers={"Temp-Token": "fake-temp-token"})
 
         assert response.status_code == 429
-        body = response.json()
-        assert "retryAfter" in body["detail"]
-        assert body["detail"]["retryAfter"] > 0
+        assert_rate_limit_response(response.json())
