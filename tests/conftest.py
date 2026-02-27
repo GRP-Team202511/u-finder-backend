@@ -5,7 +5,8 @@ Global pytest configuration and fixtures.
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from httpx import AsyncClient, ASGITransport
 
 from src.routers import auth_router, profile_router
@@ -18,6 +19,19 @@ from src.database.redis_connection import get_redis
 # ──────────────────────────────────────────────
 def build_test_app() -> FastAPI:
     app = FastAPI()
+
+    # Mirror the custom exception handler from app/main.py so that
+    # HTTPException(detail={"message": "..."}) returns {"message": "..."}
+    # instead of the default {"detail": {"message": "..."}}.
+    @app.exception_handler(HTTPException)
+    async def custom_http_exception_handler(request: Request, exc: HTTPException):
+        content = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=content,
+            headers=getattr(exc, "headers", None),
+        )
+
     app.include_router(auth_router)
     app.include_router(profile_router)
     return app

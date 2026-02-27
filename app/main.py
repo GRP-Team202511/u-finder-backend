@@ -3,6 +3,7 @@ U-Finder Backend Main Application
 FastAPI application entry point
 """
 from fastapi import FastAPI, Request, Header, HTTPException, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import time
@@ -117,6 +118,18 @@ app.add_middleware(
     allow_methods=settings.cors_methods.split(",") if settings.cors_methods != "*" else ["*"],
     allow_headers=settings.cors_headers.split(",") if settings.cors_headers != "*" else ["*"],
 )
+
+
+# Custom exception handler: flatten HTTPException detail dict
+# so {"detail": {"message": "..."}} becomes {"message": "..."}
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    content = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content,
+        headers=getattr(exc, "headers", None),
+    )
 
 
 # Request logging middleware

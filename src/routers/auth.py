@@ -3,7 +3,6 @@ Authentication router module
 Contains authentication related endpoints such as user login
 """
 from fastapi import APIRouter, HTTPException, Header, status, Depends
-from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -402,7 +401,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     },
 )
 async def resend_signup_code(
-    temp_token: Optional[str] = Header(default=None, alias="Temp-Token"),
+    temp_token: str = Header(..., alias="Temp-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -413,13 +412,6 @@ async def resend_signup_code(
     Returns success message if code is resent successfully.
     """
     logger.info("Resend signup verification code attempt")
-
-    if not temp_token:
-        logger.warning("Resend signup code failed: Missing temp token")
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
-        )
 
     temp_token_hashed = hash_token(temp_token)
 
@@ -434,9 +426,9 @@ async def resend_signup_code(
 
     if not token_record:
         logger.warning("Resend signup code failed: Invalid temp token")
-        return JSONResponse(
+        raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
+            detail={"message": "Token expired or invalid"},
         )
 
     now = datetime.now(timezone.utc)
@@ -446,9 +438,9 @@ async def resend_signup_code(
         logger.warning("Resend signup code failed: Expired token")
         await db.delete(token_record)
         await db.commit()
-        return JSONResponse(
+        raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
+            detail={"message": "Token expired or invalid"},
         )
 
     # Rate limit: 60 seconds between resends
@@ -456,9 +448,9 @@ async def resend_signup_code(
         retry_after = 60 - int((now - token_record.created_at).total_seconds())
         if retry_after > 0:
             logger.warning("Resend signup code throttled")
-            return JSONResponse(
+            raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={
+                detail={
                     "message": "Too many requests. Please wait before requesting again.",
                     "retryAfter": retry_after,
                 },
@@ -472,9 +464,9 @@ async def resend_signup_code(
 
     if not user:
         logger.error(f"Resend signup code failed: User not found for user_id: {token_record.user_id}")
-        return JSONResponse(
+        raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
+            detail={"message": "Token expired or invalid"},
         )
 
     # Generate new code and send email
@@ -784,7 +776,7 @@ async def verify_reset_code(
     },
 )
 async def resend_reset_code(
-    temp_token: Optional[str] = Header(default=None, alias="Temp-Token"),
+    temp_token: str = Header(..., alias="Temp-Token"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -795,13 +787,6 @@ async def resend_reset_code(
     Returns success message if code is resent successfully.
     """
     logger.info("Resend reset code attempt with temp-token")
-
-    if not temp_token:
-        logger.warning("Resend reset code failed: Missing temp token")
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
-        )
 
     temp_token_hashed = hash_token(temp_token)
 
@@ -816,9 +801,9 @@ async def resend_reset_code(
 
     if not reset_record:
         logger.warning("Resend reset code failed: Invalid temp token")
-        return JSONResponse(
+        raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
+            detail={"message": "Token expired or invalid"},
         )
 
     now = datetime.now(timezone.utc)
@@ -828,9 +813,9 @@ async def resend_reset_code(
         logger.warning("Resend reset code failed: Expired token")
         await db.delete(reset_record)
         await db.commit()
-        return JSONResponse(
+        raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
+            detail={"message": "Token expired or invalid"},
         )
 
     # Rate limit: 60 seconds between resends
@@ -838,9 +823,9 @@ async def resend_reset_code(
         retry_after = 60 - int((now - reset_record.created_at).total_seconds())
         if retry_after > 0:
             logger.warning("Resend reset code throttled")
-            return JSONResponse(
+            raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={
+                detail={
                     "message": "Too many requests. Please wait before requesting again.",
                     "retryAfter": retry_after,
                 },
@@ -854,9 +839,9 @@ async def resend_reset_code(
 
     if not user:
         logger.error(f"Resend reset code failed: User not found for user_id: {reset_record.user_id}")
-        return JSONResponse(
+        raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"message": "Token expired or invalid"},
+            detail={"message": "Token expired or invalid"},
         )
 
     # Generate and send new reset code
