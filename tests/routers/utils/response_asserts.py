@@ -46,7 +46,7 @@ def assert_token_invalid_response(payload: Dict[str, Any]) -> None:
 
 
 def assert_token_expired_response(payload: Dict[str, Any]) -> None:
-    assert_message_response(payload, "Token expired")
+    assert_message_response(payload, "Wrong code or expired token")
 
 
 def assert_detail_message_response(payload: Dict[str, Any], message_text: Optional[str] = None) -> None:
@@ -64,7 +64,7 @@ def assert_wrong_code_response(payload: Dict[str, Any]) -> None:
 
 
 def assert_wrong_verification_code_response(payload: Dict[str, Any]) -> None:
-    assert_message_response(payload, "Wrong verification code")
+    assert_message_response(payload, "Wrong code or expired token")
 
 
 def assert_reset_200(payload: Dict[str, Any]) -> None:
