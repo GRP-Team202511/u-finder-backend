@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
-from src.routers import auth_router
+from src.routers import auth_router, profile_router
 from src.database.connection import get_db
 from src.database.redis_connection import get_redis
 
@@ -19,6 +19,7 @@ from src.database.redis_connection import get_redis
 def build_test_app() -> FastAPI:
     app = FastAPI()
     app.include_router(auth_router)
+    app.include_router(profile_router)
     return app
 
 
@@ -150,3 +151,90 @@ def fake_refresh_token():
     rt.user_agent = "pytest"
     rt.expire_at = datetime.now(timezone.utc) + timedelta(days=30)
     return rt
+
+
+# ──────────────────────────────────────────────
+# Profile Fixtures
+# ──────────────────────────────────────────────
+
+FAKE_BEARER_TOKEN = "fake-profile-test-token"
+
+
+@pytest.fixture
+def auth_headers():
+    """
+    Returns Authorization header dict carrying a fixed Bearer token.
+
+    For profile endpoint tests that need successful authentication,
+    configure mock_redis so that hgetall returns a valid session:
+
+        mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
+
+    For tests verifying 401 behaviour, leave mock_redis at its default
+    (hgetall returns {}) and mock_db returning None — _get_current_user_id
+    will then raise HTTP 401.
+    """
+    return {"Authorization": f"Bearer {FAKE_BEARER_TOKEN}"}
+
+
+@pytest.fixture
+def fake_profile():
+    """
+    Returns a mock UserProfile ORM object with realistic data.
+
+    Fields that mirror the database model columns:
+      - user_id, basic_info
+      - education, academic, test, internship, project, campus, award
+    """
+    profile = MagicMock()
+    profile.user_id = 1
+    profile.basic_info = {
+        "name": "Test User",
+        "gender": "male",
+        "birthday": "2002-07-15",
+    }
+    profile.education = [
+        {
+            "type": "undergraduate",
+            "name": "Test University",
+            "major": "Computer Science",
+        }
+    ]
+    profile.academic = [
+        {
+            "type": "research paper",
+            "title": "Sample Paper Title",
+        }
+    ]
+    profile.test = [
+        {
+            "type": "IELTS",
+            "test_date": "2023-10-21",
+            "scores": {"overall": "7.5"},
+        }
+    ]
+    profile.internship = [
+        {
+            "company": "Test Corp",
+            "role": "Software Engineer Intern",
+        }
+    ]
+    profile.project = [
+        {
+            "name": "Sample Project",
+            "role": "Backend Developer",
+        }
+    ]
+    profile.campus = [
+        {
+            "name": "Test Society",
+            "description": "Sample campus activity.",
+        }
+    ]
+    profile.award = [
+        {
+            "name": "Merit Scholarship",
+            "description": "Awarded for academic performance.",
+        }
+    ]
+    return profile

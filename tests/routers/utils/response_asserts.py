@@ -80,3 +80,67 @@ def assert_rate_limit_response(payload: Dict[str, Any]) -> None:
     _assert_fields(payload, ["message", "retryAfter"])
     assert payload["message"] == "Too many requests. Please wait before requesting again."
     assert isinstance(payload["retryAfter"], int) and payload["retryAfter"] > 0
+
+
+# ── Profile module response assertions ────────────────────────────────────────
+
+def assert_personal_info_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates GET /profile/personal 200 response.
+    Expected schema: {name: str, gender: str, birthday: str | null}
+    """
+    _assert_fields(payload, ["name", "gender", "birthday"])
+    assert isinstance(payload["name"], str), "name must be a string"
+    assert isinstance(payload["gender"], str), "gender must be a string"
+    assert payload["birthday"] is None or isinstance(payload["birthday"], str), \
+        "birthday must be a string or null"
+
+
+def assert_array_profile_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates GET /profile/array/{field} 200 response.
+    Expected schema: {data: array}
+    """
+    _assert_fields(payload, ["data"])
+    assert isinstance(payload["data"], list), "data must be an array"
+
+
+def assert_all_profile_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates GET /profile 200 response.
+    Expected schema:
+      {
+        personalInfo: {name: str, gender: str, birthday: str},
+        education:    {data: []},
+        academic:     {data: []},
+        test:         {data: []},
+        internship:   {data: []},
+        project:      {data: []},
+        campus:       {data: []},
+        award:        {data: []},
+      }
+    """
+    top_level_fields = [
+        "personalInfo", "education", "academic", "test",
+        "internship", "project", "campus", "award",
+    ]
+    _assert_fields(payload, top_level_fields)
+
+    # Validate personalInfo sub-object
+    personal = payload["personalInfo"]
+    assert isinstance(personal, dict), "personalInfo must be an object"
+    assert set(personal.keys()) == {"name", "gender", "birthday"}, \
+        f"personalInfo must have exactly name, gender, birthday; got {list(personal.keys())}"
+    assert isinstance(personal["name"], str), "personalInfo.name must be a string"
+    assert isinstance(personal["gender"], str), "personalInfo.gender must be a string"
+    assert personal["birthday"] is None or isinstance(personal["birthday"], str), \
+        "personalInfo.birthday must be a string or null"
+
+    # Validate each array section: {data: list}
+    array_sections = ["education", "academic", "test", "internship", "project", "campus", "award"]
+    for section in array_sections:
+        section_data = payload[section]
+        assert isinstance(section_data, dict), f"{section} must be an object"
+        assert set(section_data.keys()) == {"data"}, \
+            f"{section} must have exactly one key 'data'; got {list(section_data.keys())}"
+        assert isinstance(section_data["data"], list), f"{section}.data must be an array"
