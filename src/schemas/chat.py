@@ -19,3 +19,9 @@ class ChatStreamRequest(BaseModel):
 class ErrorResponse(BaseModel):
     """Generic error response."""
     message: str
+
+
+# ============ Stop Chat ============
+class StopChatResponse(BaseModel):
+    """Response for the stop generation endpoint."""
+    result: str

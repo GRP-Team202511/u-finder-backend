@@ -118,3 +118,50 @@ class DifyUpstreamError(Exception):
         self.status_code = status_code
         self.body = body
         super().__init__(f"Dify returned {status_code}")
+
+
+async def stop_dify_chat(*, task_id: str, user: str) -> dict:
+    """
+    Call Dify ``POST /v1/chat-messages/:task_id/stop`` to abort an
+    in-progress streaming generation.
+
+    Args:
+        task_id: The Dify task ID (from SSE events).
+        user:    A stable user identifier (e.g. str(user_id)).
+
+    Returns:
+        The JSON response body from Dify (e.g. ``{"result": "success"}``).
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-200 status.
+    """
+    if not settings.dify_api_key:
+        logger.error("DIFY_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    url = f"{settings.dify_api_base_url}/chat-messages/{task_id}/stop"
+    headers = {
+        "Authorization": f"Bearer {settings.dify_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"user": user}
+
+    logger.info("Dify stop request: task_id=%s user=%s", task_id, user)
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+        response = await client.post(url, json=payload, headers=headers)
+
+        if response.status_code != 200:
+            logger.error(
+                "Dify stop returned status=%d body=%s",
+                response.status_code,
+                response.text[:500],
+            )
+            raise DifyUpstreamError(response.status_code, response.content)
+
+        result = response.json()
+        logger.info("Dify stop success: task_id=%s result=%s", task_id, result)
+        return result
