@@ -51,6 +51,14 @@ async def stream_dify_chat(
         "Content-Type": "application/json",
     }
 
+    # Validate Dify configuration before making the request
+    if not settings.dify_api_key:
+        logger.error("DIFY_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
     logger.info(
         "Dify request: user=%s conversation_id=%s query_len=%d",
         user,
@@ -65,8 +73,8 @@ async def stream_dify_chat(
             json=payload,
             headers=headers,
         ) as response:
-            # If Dify returns a non-2xx status, raise so the router can
-            # convert it into a proper HTTP error for the frontend.
+            # If Dify returns a non-200 status, raise so the router can
+            # report it as an SSE error event frame to the frontend.
             if response.status_code != 200:
                 body = await response.aread()
                 logger.error(

@@ -2,6 +2,7 @@
 Chat router module
 Provides the SSE streaming chat endpoint that proxies Dify agent responses.
 """
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, status, Depends
@@ -74,14 +75,12 @@ async def _get_current_user_id(
     summary="Chat Stream (SSE)",
     responses={
         200: {
-            "description": "SSE stream opened successfully",
+            "description": "SSE stream opened successfully. Upstream errors "
+                          "are reported as SSE `error` event frames within the stream.",
             "content": {"text/event-stream": {}},
         },
-        400: {"description": "Bad request"},
         401: {"description": "Unauthorized"},
         422: {"description": "Validation error"},
-        502: {"description": "Dify upstream error"},
-        504: {"description": "Dify timeout"},
     },
 )
 async def chat_stream(
@@ -128,6 +127,11 @@ async def chat_stream(
                 conversation_id=conversation_id,
             ):
                 yield chunk
+        except asyncio.CancelledError:
+            # Client disconnected / request cancelled — let it propagate
+            # without logging noise or attempting to write to a dead stream.
+            logger.debug("Chat stream cancelled (client disconnect)")
+            raise
         except DifyUpstreamError as exc:
             logger.error("Dify upstream error: %s", exc)
             # Send an error event so the frontend knows what happened

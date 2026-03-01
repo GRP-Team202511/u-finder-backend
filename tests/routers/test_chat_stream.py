@@ -2,8 +2,7 @@
 Router tests for POST /chat/{conversation_id}
 """
 import json
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 
 
 FAKE_BEARER_TOKEN = "fake-chat-test-token"
@@ -11,18 +10,6 @@ FAKE_BEARER_TOKEN = "fake-chat-test-token"
 
 def _auth_headers():
     return {"Authorization": f"Bearer {FAKE_BEARER_TOKEN}"}
-
-
-# ──────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────
-
-def _make_sse_lines(*events):
-    """Build raw SSE lines as Dify would return them."""
-    lines = []
-    for evt in events:
-        lines.append(f"data: {json.dumps(evt)}")
-    return lines
 
 
 SAMPLE_AGENT_THOUGHT = {
