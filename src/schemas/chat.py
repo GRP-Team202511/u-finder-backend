@@ -1,6 +1,8 @@
 """
 Chat related Pydantic models
 """
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -19,3 +21,14 @@ class ChatStreamRequest(BaseModel):
 class ErrorResponse(BaseModel):
     """Generic error response."""
     message: str
+
+
+class ValidationErrorResponse(BaseModel):
+    """Validation error response from FastAPI/Pydantic."""
+    detail: list[dict[str, Any]]
+
+
+# ============ Stop Chat ============
+class StopChatResponse(BaseModel):
+    """Response for the stop generation endpoint."""
+    result: str

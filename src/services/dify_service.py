@@ -13,8 +13,10 @@ from src.config.settings import get_settings
 logger = get_logger(__name__)
 settings = get_settings()
 
-# Dify streaming endpoint
-DIFY_CHAT_MESSAGES_URL = f"{settings.dify_api_base_url}/chat-messages"
+
+def _normalized_dify_base_url() -> str:
+    """Return a normalized Dify API base URL without trailing slash."""
+    return settings.dify_api_base_url.rstrip("/")
 
 
 async def stream_dify_chat(
@@ -38,6 +40,9 @@ async def stream_dify_chat(
         SSE frame strings in the form ``"data: {…}\\n\\n"`` ready to be
         written directly into a ``StreamingResponse``.
     """
+    base_url = _normalized_dify_base_url()
+    chat_messages_url = f"{base_url}/chat-messages"
+
     is_first_turn = not conversation_id  # True when starting a new conversation
     payload = {
         "inputs": {"is_first_turn": str(is_first_turn).lower()},
@@ -67,49 +72,53 @@ async def stream_dify_chat(
         len(query),
     )
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
-        async with client.stream(
-            "POST",
-            DIFY_CHAT_MESSAGES_URL,
-            json=payload,
-            headers=headers,
-        ) as response:
-            # If Dify returns a non-200 status, raise so the router can
-            # report it as an SSE error event frame to the frontend.
-            if response.status_code != 200:
-                body = await response.aread()
-                logger.error(
-                    "Dify returned status=%d body=%s",
-                    response.status_code,
-                    body.decode(errors="replace")[:500],
-                )
-                raise DifyUpstreamError(response.status_code, body)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            async with client.stream(
+                "POST",
+                chat_messages_url,
+                json=payload,
+                headers=headers,
+            ) as response:
+                # If Dify returns a non-200 status, raise so the router can
+                # report it as an SSE error event frame to the frontend.
+                if response.status_code != 200:
+                    body = await response.aread()
+                    logger.error(
+                        "Dify returned status=%d body=%s",
+                        response.status_code,
+                        body.decode(errors="replace")[:500],
+                    )
+                    raise DifyUpstreamError(response.status_code, body)
 
-            async for raw_line in response.aiter_lines():
-                # Dify sends lines like "data: {...}" followed by blank lines.
-                if not raw_line.startswith("data:"):
-                    continue
+                async for raw_line in response.aiter_lines():
+                    # Dify sends lines like "data: {...}" followed by blank lines.
+                    if not raw_line.startswith("data:"):
+                        continue
 
-                # Yield the line in standard SSE format
-                yield raw_line + "\n\n"
+                    # Yield the line in standard SSE format
+                    yield raw_line + "\n\n"
 
-                # Optionally log message_end for traceability
-                try:
-                    json_str = raw_line[len("data:"):].strip()
-                    event_obj = json.loads(json_str)
-                    if event_obj.get("event") == "message_end":
-                        metadata = event_obj.get("metadata", {})
-                        usage = metadata.get("usage", {})
-                        logger.info(
-                            "Dify stream ended: conversation_id=%s message_id=%s "
-                            "total_tokens=%s latency=%s",
-                            event_obj.get("conversation_id"),
-                            event_obj.get("message_id"),
-                            usage.get("total_tokens"),
-                            usage.get("latency"),
-                        )
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                    # Optionally log message_end for traceability
+                    try:
+                        json_str = raw_line[len("data:"):].strip()
+                        event_obj = json.loads(json_str)
+                        if event_obj.get("event") == "message_end":
+                            metadata = event_obj.get("metadata", {})
+                            usage = metadata.get("usage", {})
+                            logger.info(
+                                "Dify stream ended: conversation_id=%s message_id=%s "
+                                "total_tokens=%s latency=%s",
+                                event_obj.get("conversation_id"),
+                                event_obj.get("message_id"),
+                                usage.get("total_tokens"),
+                                usage.get("latency"),
+                            )
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+    except httpx.RequestError as exc:
+        logger.error("Dify stream request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
 
 
 class DifyUpstreamError(Exception):
@@ -119,3 +128,60 @@ class DifyUpstreamError(Exception):
         self.status_code = status_code
         self.body = body
         super().__init__(f"Dify returned {status_code}")
+
+
+async def stop_dify_chat(*, task_id: str, user: str) -> dict:
+    """
+    Call Dify ``POST /v1/chat-messages/:task_id/stop`` to abort an
+    in-progress streaming generation.
+
+    Args:
+        task_id: The Dify task ID (from SSE events).
+        user:    A stable user identifier (e.g. str(user_id)).
+
+    Returns:
+        The JSON response body from Dify (e.g. ``{"result": "success"}``).
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-200 status.
+    """
+    if not settings.dify_api_key:
+        logger.error("DIFY_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    base_url = _normalized_dify_base_url()
+    url = f"{base_url}/chat-messages/{task_id}/stop"
+    headers = {
+        "Authorization": f"Bearer {settings.dify_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"user": user}
+
+    logger.info("Dify stop request: task_id=%s user=%s", task_id, user)
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            response = await client.post(url, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error("Dify stop request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
+
+    if response.status_code != 200:
+        logger.error(
+            "Dify stop returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    try:
+        result = response.json()
+    except ValueError as exc:
+        logger.error("Dify stop returned invalid JSON: %s", response.text[:500])
+        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
+
+    logger.info("Dify stop success: task_id=%s result=%s", task_id, result)
+    return result

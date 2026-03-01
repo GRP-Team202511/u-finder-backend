@@ -1,5 +1,5 @@
 """
-Unit tests for src.services.dify_service.stream_dify_chat
+Unit tests for src.services.dify_service (stream_dify_chat & stop_dify_chat)
 
 These tests exercise the service layer directly (no router involvement)
 by mocking the outbound httpx calls to Dify.
@@ -8,7 +8,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.services.dify_service import stream_dify_chat, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, DifyUpstreamError
 
 
 # ──────────────────────────────────────────────
@@ -228,3 +228,102 @@ class TestDifyMalformedJSON:
         # Both lines should be yielded, malformed or not
         assert len(frames) == 2
         assert "NOT_VALID_JSON" in frames[0]
+
+
+# ══════════════════════════════════════════════
+# stop_dify_chat tests
+# ══════════════════════════════════════════════
+
+def _build_post_client(*, status_code: int = 200, json_body: dict | None = None, content: bytes = b""):
+    """
+    Build a mock httpx.AsyncClient for non-streaming POST (stop endpoint).
+    """
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.json.return_value = json_body or {}
+    mock_response.text = json.dumps(json_body) if json_body else content.decode(errors="replace")
+    mock_response.content = content or json.dumps(json_body or {}).encode()
+
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=mock_response)
+
+    client_ctx = MagicMock()
+    client_ctx.__aenter__ = AsyncMock(return_value=client)
+    client_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    return client_ctx
+
+
+class TestStopDifyConfigValidation:
+    """Verify early-exit when required settings are missing."""
+
+    async def test_empty_api_key_raises(self):
+        with patch("src.services.dify_service.settings") as mock_settings:
+            mock_settings.dify_api_key = ""
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await stop_dify_chat(task_id="t1", user="1")
+
+            assert b"DIFY_API_KEY" in exc_info.value.body
+
+    async def test_empty_base_url_raises(self):
+        with patch("src.services.dify_service.settings") as mock_settings:
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = ""
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await stop_dify_chat(task_id="t1", user="1")
+
+            assert b"DIFY_API_BASE_URL" in exc_info.value.body
+
+
+class TestStopDifySuccess:
+    """Verify successful stop returns the JSON body."""
+
+    async def test_returns_result(self):
+        client_ctx = _build_post_client(status_code=200, json_body={"result": "success"})
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            result = await stop_dify_chat(task_id="task_abc", user="1")
+
+        assert result == {"result": "success"}
+
+
+class TestStopDifyErrors:
+    """Verify DifyUpstreamError for non-200 responses."""
+
+    async def test_404_raises(self):
+        client_ctx = _build_post_client(status_code=404, content=b"Not Found")
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await stop_dify_chat(task_id="t_gone", user="1")
+
+            assert exc_info.value.status_code == 404
+
+    async def test_500_raises(self):
+        client_ctx = _build_post_client(status_code=500, content=b"Internal Server Error")
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await stop_dify_chat(task_id="t1", user="1")
+
+            assert exc_info.value.status_code == 500

@@ -12,8 +12,13 @@ from redis.asyncio import Redis
 
 from src.config.logger import get_logger
 from src.database import get_db, get_redis, RefreshToken
-from src.schemas.chat import ChatStreamRequest
-from src.services.dify_service import stream_dify_chat, DifyUpstreamError
+from src.schemas.chat import (
+    ChatStreamRequest,
+    StopChatResponse,
+    ErrorResponse,
+    ValidationErrorResponse,
+)
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
 
@@ -162,3 +167,100 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ──────────────────────────────────────────────
+# Stop Chat Generation Endpoint
+# ──────────────────────────────────────────────
+@router.post(
+    "/{task_id}/stop",
+    summary="Stop Chat Generation",
+    response_model=StopChatResponse,
+    responses={
+        200: {
+            "description": "Generation stopped successfully",
+            "model": StopChatResponse,
+            "content": {
+                "application/json": {
+                    "example": {"result": "success"}
+                }
+            },
+        },
+        401: {
+            "description": "Unauthorized",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Invalid or expired token"}
+                }
+            },
+        },
+        404: {
+            "description": "Task not found or already completed",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Task not found or already completed"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error",
+            "model": ValidationErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "missing",
+                                "loc": ["header", "Authorization"],
+                                "msg": "Field required",
+                                "input": None,
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+        502: {
+            "description": "Dify upstream error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Dify service unavailable"}
+                }
+            },
+        },
+    },
+)
+async def stop_chat(
+    task_id: str,
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Stop an in-progress streaming chat generation.
+
+    Forwards the stop request to Dify ``POST /v1/chat-messages/:task_id/stop``
+    and returns the result.
+    """
+    user_id = await _get_current_user_id(authorization, db, redis)
+    logger.info("Stop chat request: user_id=%s task_id=%s", user_id, task_id)
+
+    try:
+        result = await stop_dify_chat(task_id=task_id, user=str(user_id))
+    except DifyUpstreamError as exc:
+        logger.error("Dify stop upstream error: %s", exc)
+        # Dify returns 404 when the task doesn't exist or has already finished
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Task not found or already completed"},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "Dify service unavailable"},
+        )
+
+    return StopChatResponse(result=result.get("result", "success"))
