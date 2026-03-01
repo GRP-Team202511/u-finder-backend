@@ -12,7 +12,12 @@ from redis.asyncio import Redis
 
 from src.config.logger import get_logger
 from src.database import get_db, get_redis, RefreshToken
-from src.schemas.chat import ChatStreamRequest, StopChatResponse
+from src.schemas.chat import (
+    ChatStreamRequest,
+    StopChatResponse,
+    ErrorResponse,
+    ValidationErrorResponse,
+)
 from src.services.dify_service import stream_dify_chat, stop_dify_chat, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
@@ -172,11 +177,60 @@ async def chat_stream(
     summary="Stop Chat Generation",
     response_model=StopChatResponse,
     responses={
-        200: {"description": "Generation stopped successfully"},
-        401: {"description": "Unauthorized"},
-        404: {"description": "Task not found or already completed"},
-        422: {"description": "Validation error"},
-        502: {"description": "Dify upstream error"},
+        200: {
+            "description": "Generation stopped successfully",
+            "model": StopChatResponse,
+            "content": {
+                "application/json": {
+                    "example": {"result": "success"}
+                }
+            },
+        },
+        401: {
+            "description": "Unauthorized",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Invalid or expired token"}
+                }
+            },
+        },
+        404: {
+            "description": "Task not found or already completed",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Task not found or already completed"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error",
+            "model": ValidationErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "missing",
+                                "loc": ["header", "Authorization"],
+                                "msg": "Field required",
+                                "input": None,
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+        502: {
+            "description": "Dify upstream error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Dify service unavailable"}
+                }
+            },
+        },
     },
 )
 async def stop_chat(
