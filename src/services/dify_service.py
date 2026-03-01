@@ -38,8 +38,9 @@ async def stream_dify_chat(
         SSE frame strings in the form ``"data: {…}\\n\\n"`` ready to be
         written directly into a ``StreamingResponse``.
     """
+    is_first_turn = not conversation_id  # True when starting a new conversation
     payload = {
-        "inputs": {},
+        "inputs": {"is_first_turn": str(is_first_turn).lower()},
         "query": query,
         "response_mode": "streaming",
         "conversation_id": conversation_id or "",
