@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from httpx import AsyncClient, ASGITransport
 
-from src.routers import auth_router, profile_router
+from src.routers import auth_router, profile_router, chat_router
 from src.database.connection import get_db
 from src.database.redis_connection import get_redis
 
@@ -34,6 +34,7 @@ def build_test_app() -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(profile_router)
+    app.include_router(chat_router)
     return app
 
 
