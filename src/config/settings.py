@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_password: str = ""
 
+    # Dify Settings
+    dify_api_base_url: str = "https://api.dify.ai/v1"
+    dify_api_key: str = ""
+    dify_timeout: int = 60  # seconds
+
     # Workers
     workers: int = 4
 
