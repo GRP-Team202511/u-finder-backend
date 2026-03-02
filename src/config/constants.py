@@ -11,22 +11,20 @@ class UserType(IntEnum):
     """
     STUDENT = 1         # Regular student user
     INSTITUTION = 2     # Educational institution account
-    ADMIN = 99          # System administrator
     
     @classmethod
     def get_description(cls, value: int) -> str:
         """Get human-readable description of user type"""
         descriptions = {
             cls.STUDENT: "Student",
-            cls.INSTITUTION: "Institution",
-            cls.ADMIN: "Administrator"
+            cls.INSTITUTION: "Institution"
         }
         return descriptions.get(value, "Unknown")
     
     @classmethod
     def is_valid(cls, value: int) -> bool:
         """Check if a user type value is valid"""
-        return value in [cls.STUDENT, cls.INSTITUTION, cls.ADMIN]
+        return value in [cls.STUDENT, cls.INSTITUTION]
 
 
 class TokenType:

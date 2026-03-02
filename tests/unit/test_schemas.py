@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from src.schemas.auth import (
     SignUpRequest,
     ConfirmResetPasswordRequest,
-    UpdateUserTypeRequest,
 )
 
 
@@ -83,19 +82,3 @@ class TestConfirmResetPasswordRequest:
         """The 'newPassword' alias must populate the new_password field."""
         req = ConfirmResetPasswordRequest(**{"code": "654321", "newPassword": "Valid1Pass"})
         assert req.new_password == "Valid1Pass"
-
-
-class TestUpdateUserTypeRequest:
-    """user_type validation on UpdateUserTypeRequest."""
-
-    @pytest.mark.parametrize("valid_type", [1, 2, 99])
-    def test_valid_user_types_accepted(self, valid_type):
-        """Values 1 (student), 2 (institution), and 99 (admin) must be accepted."""
-        req = UpdateUserTypeRequest(user_type=valid_type)
-        assert req.user_type == valid_type
-
-    @pytest.mark.parametrize("invalid_type", [0, 3, 50, 100, -1])
-    def test_invalid_user_types_raise(self, invalid_type):
-        """Values outside the allowed set must raise ValidationError."""
-        with pytest.raises(ValidationError):
-            UpdateUserTypeRequest(user_type=invalid_type)

@@ -29,7 +29,6 @@ class SignUpRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128, description="User's password (8-128 characters)")
     # Note: user_type is automatically set to 1 (student) by default
-    # Administrators can change user type through admin panel
     
     @field_validator('email')
     @classmethod
@@ -126,35 +125,4 @@ class ConfirmResetPasswordResponse(BaseModel):
 class ErrorResponse(BaseModel):
     message: str
 
-
-# ============ Admin - Update User Type ============
-class UpdateUserTypeRequest(BaseModel):
-    user_type: int = Field(..., description="New user type (1=student, 2=institution, 99=admin)")
-    
-    @field_validator('user_type')
-    @classmethod
-    def validate_user_type(cls, v: int) -> int:
-        """Validate user type value"""
-        from src.config.constants import UserType
-        if not UserType.is_valid(v):
-            raise ValueError(f'Invalid user type. Must be one of: {UserType.STUDENT}, {UserType.INSTITUTION}, {UserType.ADMIN}')
-        return v
-
-
-class UpdateUserTypeResponse(BaseModel):
-    user_id: int
-    user_type: int
-    message: str
-
-
-class GetUserInfoResponse(BaseModel):
-    user_id: int
-    email: str
-    user_type: int
-    user_type_description: str
-    is_blocked: bool
-    is_2fa_enabled: bool
-    passkey_enabled: bool
-    created_at: str
-    updated_at: str
 
