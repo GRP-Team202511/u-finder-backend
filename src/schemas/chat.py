@@ -1,8 +1,7 @@
 """
 Chat related Pydantic models
 """
-from typing import Any
-
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -15,6 +14,55 @@ class ChatStreamRequest(BaseModel):
         max_length=5000,
         description="The user's input message / question.",
     )
+
+
+# ============ Chat Messages (History) ============
+class MessageFile(BaseModel):
+    """File attached to a message."""
+    id: str
+    type: str
+    url: str
+    belongs_to: str
+
+
+class Feedback(BaseModel):
+    """User feedback on a message."""
+    rating: str = Field(..., description="Upvote as 'like' / Downvote as 'dislike'")
+
+
+class AgentThought(BaseModel):
+    """Agent reasoning step."""
+    id: str
+    chain_id: Optional[Any] = None
+    message_id: str
+    position: int
+    thought: str
+    tool: str
+    tool_input: str
+    created_at: int
+    observation: str
+    files: list[str] = []
+
+
+class MessageItem(BaseModel):
+    """A single message in conversation history."""
+    id: str
+    conversation_id: str
+    inputs: dict = {}
+    query: str
+    answer: str
+    message_files: list[MessageFile] = []
+    feedback: Optional[Feedback] = None
+    retriever_resources: list[str] = []
+    created_at: int
+    agent_thoughts: list[AgentThought] = []
+
+
+class ChatMessagesResponse(BaseModel):
+    """Response for GET /chat/messages."""
+    limit: int = Field(..., description="Number of returned items")
+    has_more: bool = Field(..., description="Whether there is a next page")
+    data: list[MessageItem] = Field(..., description="Message list")
 
 
 # ============ Error ============
