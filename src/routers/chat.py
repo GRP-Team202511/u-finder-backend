@@ -86,7 +86,6 @@ async def _get_current_user_id(
         "(i.e., in reverse order)."
     ),
     responses={
-        400: {"description": "Missing conversationId", "model": ErrorResponse},
         401: {"description": "Unauthorized", "model": ErrorResponse},
         422: {"description": "Validation error"},
         502: {"description": "Dify service unavailable", "model": ErrorResponse},

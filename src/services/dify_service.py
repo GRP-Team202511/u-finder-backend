@@ -243,26 +243,30 @@ async def get_dify_messages(
         limit,
     )
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
-        response = await client.get(
-            DIFY_MESSAGES_URL,
-            params=params,
-            headers=headers,
-        )
-
-        if response.status_code != 200:
-            logger.error(
-                "Dify messages returned status=%d body=%s",
-                response.status_code,
-                response.text[:500],
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            response = await client.get(
+                DIFY_MESSAGES_URL,
+                params=params,
+                headers=headers,
             )
-            raise DifyUpstreamError(response.status_code, response.content)
+    except httpx.RequestError as exc:
+        logger.error("Dify messages request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
 
-        data = response.json()
-        logger.info(
-            "Dify messages response: conversation_id=%s count=%d has_more=%s",
-            conversation_id,
-            len(data.get("data", [])),
-            data.get("has_more"),
+    if response.status_code != 200:
+        logger.error(
+            "Dify messages returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
         )
-        return data
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    data = response.json()
+    logger.info(
+        "Dify messages response: conversation_id=%s count=%d has_more=%s",
+        conversation_id,
+        len(data.get("data", [])),
+        data.get("has_more"),
+    )
+    return data
