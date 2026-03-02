@@ -2,7 +2,7 @@
 U-Finder Backend Main Application
 FastAPI application entry point
 """
-from fastapi import FastAPI, Request, Header, HTTPException, status
+from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -14,7 +14,7 @@ from src.database import redis_connection
 from src.config.logger import get_logger
 from src.routers import auth_router, profile_router, chat_router
 from src.config.settings import get_settings
-from src.utils import cleanup_all_expired_records, get_token_data, verify_admin_from_db
+from src.utils import cleanup_all_expired_records
 
 # Initialize logger and settings
 logger = get_logger(__name__)
@@ -181,29 +181,4 @@ async def health_check():
     return {"status": "healthy", "service": "u-finder-backend"}
 
 
-# Admin endpoint for manual cleanup
-@app.post("/admin/cleanup", tags=["Admin"])
-async def manual_cleanup(
-    authorization: str = Header(..., alias="Authorization"),
-):
-    """Manually trigger cleanup of expired records"""
-    logger.info("Manual cleanup triggered")
 
-    token_data = get_token_data(authorization)
-
-    async with AsyncSessionLocal() as db:
-        admin = await verify_admin_from_db(token_data["user_id"], db)
-        if not admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"message": "Admin privileges required"},
-            )
-
-        result = await cleanup_all_expired_records(db, redis=redis_connection.redis_client)
-
-    logger.info(f"Manual cleanup completed: {result}")
-    return {
-        "status": "success",
-        "message": "Cleanup completed",
-        "deleted": result
-    }
