@@ -1,0 +1,260 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "U-Finder",
+    "description": "Endpoints for user authentication and TOTP-based two-factor authentication (2FA) management.",
+    "version": "1.1.0"
+  },
+  "tags": [],
+  "paths": {
+    "/chat/messages": {
+      "get": {
+        "summary": "Get Conversation History Messages",
+        "deprecated": false,
+        "description": "Returns historical chat records in a scrolling load format, with the first page returning the latest `{limit}` messages, i.e., in reverse order.",
+        "tags": [],
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Conversation ID. Must be a valid Dify conversation UUID."
+          },
+          {
+            "name": "first_id",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "default": "" },
+            "description": "The ID of the first chat record on the current page, default is empty string (returns the latest page)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 20, "minimum": 1, "maximum": 100 },
+            "description": "How many chat history messages to return in one request, default is 20. Range: 1-100."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved conversation history messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "limit": {
+                      "type": "integer",
+                      "description": "Number of returned items, if input exceeds system limit, returns system limit amount"
+                    },
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether there is a next page"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Message ID"
+                          },
+                          "conversation_id": {
+                            "type": "string",
+                            "description": "Conversation ID"
+                          },
+                          "inputs": {
+                            "type": "object",
+                            "properties": {},
+                            "description": "User input parameters."
+                          },
+                          "query": {
+                            "type": "string",
+                            "description": "User input / question content."
+                          },
+                          "answer": {
+                            "type": "string",
+                            "description": "Response message content"
+                          },
+                          "message_files": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": { "type": "string" },
+                                "type": { "type": "string" },
+                                "url": { "type": "string" },
+                                "belongs_to": { "type": "string" }
+                              }
+                            },
+                            "description": "Message files"
+                          },
+                          "feedback": {
+                            "type": "object",
+                            "properties": {
+                              "rating": {
+                                "type": "string",
+                                "description": "Upvote as `like` / Downvote as `dislike`"
+                              }
+                            },
+                            "description": "Feedback information",
+                            "required": ["rating"],
+                            "nullable": true
+                          },
+                          "retriever_resources": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Citation and Attribution List"
+                          },
+                          "created_at": {
+                            "type": "integer",
+                            "description": "Creation timestamp, e.g., 1705395332"
+                          },
+                          "agent_thoughts": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": { "type": "string" },
+                                "chain_id": { "type": "null" },
+                                "message_id": { "type": "string" },
+                                "position": { "type": "integer" },
+                                "thought": { "type": "string" },
+                                "tool": { "type": "string" },
+                                "tool_input": { "type": "string" },
+                                "created_at": { "type": "integer" },
+                                "observation": { "type": "string" },
+                                "files": {
+                                  "type": "array",
+                                  "items": { "type": "string" }
+                                }
+                              },
+                              "required": [
+                                "id", "chain_id", "message_id", "position",
+                                "thought", "tool", "tool_input", "created_at",
+                                "observation", "files"
+                              ]
+                            },
+                            "description": "Agent thought (Empty if it's a Basic Assistant)"
+                          }
+                        }
+                      },
+                      "description": "Message list"
+                    }
+                  },
+                  "required": ["limit", "has_more", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request — missing or empty `conversationId` parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "message": "conversationId is required"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing, malformed, or expired Bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "message": "Invalid or expired token"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error — invalid query parameter types or values (e.g., limit out of range).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "loc": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          },
+                          "msg": { "type": "string" },
+                          "type": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bad Gateway — upstream Dify API returned a non-200 status code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "message": "Dify service unavailable"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error — unexpected server-side failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "message": "Internal server error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          { "JWT": [] }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Human-readable error description"
+          }
+        },
+        "required": ["message"]
+      }
+    },
+    "responses": {},
+    "securitySchemes": {
+      "JWT": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "servers": [],
+  "security": []
+}
