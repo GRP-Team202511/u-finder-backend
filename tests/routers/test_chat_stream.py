@@ -4,6 +4,14 @@ Router tests for POST /chat/{conversation_id}
 import json
 from unittest.mock import patch
 
+import pytest
+
+from tests.routers.utils.response_asserts import (
+    assert_message_response,
+    assert_stream_error_event,
+    assert_validation_error,
+)
+
 
 FAKE_BEARER_TOKEN = "fake-chat-test-token"
 
@@ -66,7 +74,7 @@ class TestChatAuth:
             headers=_auth_headers(),
         )
         assert resp.status_code == 401
-        assert resp.json()["message"] == "Invalid or expired token"
+        assert_message_response(resp.json(), "Invalid or expired token")
 
 
 # ──────────────────────────────────────────────
@@ -86,6 +94,7 @@ class TestChatValidation:
             headers=_auth_headers(),
         )
         assert resp.status_code == 422
+        assert_validation_error(resp.json())
 
     async def test_missing_message_returns_422(self, client, mock_redis):
         """Missing message field → 422."""
@@ -97,6 +106,7 @@ class TestChatValidation:
             headers=_auth_headers(),
         )
         assert resp.status_code == 422
+        assert_validation_error(resp.json())
 
 
 # ──────────────────────────────────────────────
@@ -210,7 +220,7 @@ class TestChatErrors:
         ]
         assert len(frames) >= 1
         error_evt = json.loads(frames[0])
-        assert error_evt["event"] == "error"
+        assert_stream_error_event(error_evt)
         assert "unavailable" in error_evt["message"].lower()
 
     async def test_unexpected_error_sends_error_event(self, client, mock_redis):
@@ -240,4 +250,56 @@ class TestChatErrors:
         ]
         assert len(frames) >= 1
         error_evt = json.loads(frames[0])
-        assert error_evt["event"] == "error"
+        assert_stream_error_event(error_evt)
+
+    async def test_dify_timeout_sends_error_event(self, client, mock_redis):
+        """504 Gateway Timeout from Dify should produce an SSE error frame."""
+        mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
+
+        from src.services.dify_service import DifyUpstreamError
+
+        async def _timeout_stream(**kwargs):
+            raise DifyUpstreamError(504, b"Gateway Timeout")
+            yield  # pragma: no cover
+
+        with patch(
+            "src.routers.chat.stream_dify_chat",
+            side_effect=lambda **kw: _timeout_stream(**kw),
+        ):
+            resp = await client.post(
+                "/chat/null",
+                json={"message": "test"},
+                headers=_auth_headers(),
+            )
+
+        assert resp.status_code == 200  # SSE stream always opens with 200
+        frames = [
+            line[len("data: "):]
+            for line in resp.text.strip().split("\n")
+            if line.startswith("data: ")
+        ]
+        assert len(frames) >= 1
+        error_evt = json.loads(frames[0])
+        assert_stream_error_event(error_evt)
+        assert "unavailable" in error_evt["message"].lower()
+
+    @pytest.mark.xfail(
+        reason=(
+            "KNOWN DEFECT: OpenAPI spec documents HTTP 400 as a possible response, "
+            "but the endpoint never produces it. All validation failures return 422."
+        ),
+        strict=True,
+    )
+    async def test_stream_400_not_implemented(self, client, mock_redis):
+        """OpenAPI doc lists HTTP 400 as a valid response for this endpoint.
+        The backend currently never returns 400; this test documents the gap."""
+        mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
+
+        resp = await client.post(
+            "/chat/null",
+            json={"message": "test"},
+            headers=_auth_headers(),
+        )
+        # This assertion is expected to fail — the backend returns 200 or 422,
+        # never 400. Remove xfail once the backend implements proper 400 handling.
+        assert resp.status_code == 400
