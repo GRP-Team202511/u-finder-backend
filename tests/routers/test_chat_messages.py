@@ -7,9 +7,6 @@ Endpoint behaviour:
   - Forwards conversationId / first_id / limit to get_dify_messages().
   - Returns {limit: int, has_more: bool, data: list[message]}.
   - Errors from Dify → 502; unexpected exceptions → 500.
-  - OpenAPI documents 400 for empty conversationId, but the backend currently
-    passes it through to Dify. test_empty_conversation_id_returns_400 tracks this
-    as a failing test until the backend adds explicit 400 validation.
 """
 from unittest.mock import patch, AsyncMock
 
@@ -297,13 +294,9 @@ class TestGetMessagesErrors:
         assert_message_response(resp.json(), "Internal server error")
 
     async def test_empty_conversation_id_returns_400(self, client, mock_redis):
-        """OpenAPI doc mandates 400 for empty conversationId.
-        Backend currently returns 200 (passes empty string to Dify) — backend fix required."""
+        """OpenAPI doc mandates 400 for empty conversationId."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
-        # Patch get_dify_messages to avoid real upstream/config-dependent behavior.
-        # The test must fail specifically because the backend does not return 400
-        # for empty conversationId, not because of a missing API key or network call.
         with patch(
             "src.routers.chat.get_dify_messages",
             new_callable=AsyncMock,
