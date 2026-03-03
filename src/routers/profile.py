@@ -162,7 +162,7 @@ def _parse_dify_personal_info(outputs: dict) -> dict:
     ),
 )
 async def upload_cv(
-    file: UploadFile = File(None),
+    file: Optional[UploadFile] = File(None),
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
@@ -172,7 +172,7 @@ async def upload_cv(
         user_id = await _get_current_user_id(authorization, db, redis)
 
         # ── Validate file presence ──
-        if file is None or file.filename is None:
+        if file is None or not file.filename:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"message": "No file uploaded"},
@@ -197,7 +197,7 @@ async def upload_cv(
         if len(file_content) > settings.cv_max_file_size:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail={"message": "File too large. Maximum size is 10 MB"},
+                detail={"message": f"File too large. Maximum size is {settings.cv_max_file_size // (1024 * 1024)} MB"},
             )
 
         # ── Upload file to Dify ──

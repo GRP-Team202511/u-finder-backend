@@ -365,7 +365,8 @@ async def run_cv_parsing_workflow(
 
     Args:
         upload_file_id: The file ID obtained from ``upload_file_to_dify``.
-        filename:       Original filename for the file object descriptor.
+        filename:       Original filename, used only for logging (not
+                        included in the Dify payload).
         user:           A stable user identifier.
 
     Returns:
