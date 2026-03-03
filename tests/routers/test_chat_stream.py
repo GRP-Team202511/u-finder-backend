@@ -4,8 +4,6 @@ Router tests for POST /chat/{conversation_id}
 import json
 from unittest.mock import patch
 
-import pytest
-
 from tests.routers.utils.response_asserts import (
     assert_message_response,
     assert_stream_error_event,
@@ -283,16 +281,9 @@ class TestChatErrors:
         assert_stream_error_event(error_evt)
         assert "unavailable" in error_evt["message"].lower()
 
-    @pytest.mark.xfail(
-        reason=(
-            "KNOWN DEFECT: OpenAPI spec documents HTTP 400 as a possible response, "
-            "but the endpoint never produces it. All validation failures return 422."
-        ),
-        strict=True,
-    )
     async def test_stream_400_not_implemented(self, client, mock_redis):
         """OpenAPI doc lists HTTP 400 as a valid response for this endpoint.
-        The backend currently never returns 400; this test documents the gap."""
+        The backend currently never returns 400 — backend fix required."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         resp = await client.post(
@@ -300,6 +291,4 @@ class TestChatErrors:
             json={"message": "test"},
             headers=_auth_headers(),
         )
-        # This assertion is expected to fail — the backend returns 200 or 422,
-        # never 400. Remove xfail once the backend implements proper 400 handling.
         assert resp.status_code == 400

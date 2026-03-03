@@ -1,7 +1,6 @@
 """
 Router tests for POST /chat/{task_id}/stop
 """
-import json
 from unittest.mock import patch, AsyncMock
 
 from src.services.dify_service import DifyUpstreamError
