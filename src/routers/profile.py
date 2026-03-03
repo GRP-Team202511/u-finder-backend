@@ -216,13 +216,24 @@ async def upload_cv(
         )
 
         # ── Parse structured output ──
+        # Dify workflow may nest all fields under a "result" key
+        if "result" in outputs and len(outputs) == 1:
+            inner = outputs["result"]
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except (json.JSONDecodeError, TypeError):
+                    inner = outputs
+            if isinstance(inner, dict):
+                outputs = inner
+
         personal = _parse_dify_personal_info(outputs)
 
         response = AllProfileResponse(
             personalInfo=PersonalInfoData(
-                name=personal.get("name", ""),
-                gender=personal.get("gender", ""),
-                birthday=personal.get("birthday", ""),
+                name=personal.get("name") or "",
+                gender=personal.get("gender") or "",
+                birthday=personal.get("birthday") or "",
             ),
             education=ProfileSectionData(data=_parse_dify_section(outputs, "education")),
             academic=ProfileSectionData(data=_parse_dify_section(outputs, "academic")),

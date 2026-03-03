@@ -388,13 +388,11 @@ async def run_cv_parsing_workflow(
 
     payload = {
         "inputs": {
-            "file": [
-                {
-                    "type": "document",
-                    "transfer_method": "local_file",
-                    "upload_file_id": upload_file_id,
-                }
-            ],
+            "file": {
+                "type": "document",
+                "transfer_method": "local_file",
+                "upload_file_id": upload_file_id,
+            },
         },
         "response_mode": "blocking",
         "user": user,
@@ -452,4 +450,6 @@ async def run_cv_parsing_workflow(
         result.get("workflow_run_id"),
         data.get("total_tokens"),
     )
+    logger.info("Dify workflow outputs keys=%s", list(outputs.keys()))
+    logger.info("Dify workflow outputs content=%s", json.dumps(outputs, ensure_ascii=False, default=str)[:3000])
     return outputs
