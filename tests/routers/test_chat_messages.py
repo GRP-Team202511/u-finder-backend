@@ -7,10 +7,10 @@ Endpoint behaviour:
   - Forwards conversationId / first_id / limit to get_dify_messages().
   - Returns {limit: int, has_more: bool, data: list[message]}.
   - Errors from Dify → 502; unexpected exceptions → 500.
-  - OpenAPI documents 400 for missing conversationId, but FastAPI treats the
-    required Query() as a 422 — this mismatch is recorded as an xfail test.
+  - OpenAPI documents 400 for empty conversationId, but the backend currently
+    passes it through to Dify. test_empty_conversation_id_returns_400 tracks this
+    as a failing test until the backend adds explicit 400 validation.
 """
-import pytest
 from unittest.mock import patch, AsyncMock
 
 from tests.routers.utils.response_asserts import (
@@ -296,18 +296,9 @@ class TestGetMessagesErrors:
         assert resp.status_code == 500
         assert_message_response(resp.json(), "Internal server error")
 
-    @pytest.mark.xfail(
-        reason=(
-            "KNOWN DEFECT: OpenAPI spec documents HTTP 400 for missing/empty "
-            "conversationId, but FastAPI treats the required Query() parameter "
-            "as a 422 validation error instead. Remove xfail if backend adds "
-            "explicit 400 handling."
-        ),
-        strict=True,
-    )
     async def test_empty_conversation_id_returns_400(self, client, mock_redis):
-        """OpenAPI doc mandates 400 for missing/empty conversationId.
-        Backend currently returns 200 or 422 instead — documented as a known gap."""
+        """OpenAPI doc mandates 400 for empty conversationId.
+        Backend currently returns 200 (passes empty string to Dify) — backend fix required."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         # Patch get_dify_messages to avoid real upstream/config-dependent behavior.
