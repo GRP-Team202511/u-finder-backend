@@ -63,7 +63,11 @@ class Settings(BaseSettings):
     # Dify Settings
     dify_api_base_url: str = "https://api.dify.ai/v1"
     dify_api_key: str = ""
+    dify_workflow_api_key: str = ""
     dify_timeout: int = 60  # seconds
+
+    # CV Upload Settings
+    cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB
 
     # Workers
     workers: int = 4

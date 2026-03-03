@@ -2,7 +2,8 @@
 Profile router module
 Contains endpoints for user profile management
 """
-from fastapi import APIRouter, HTTPException, Header, status, Depends
+import json
+from fastapi import APIRouter, HTTPException, Header, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from redis.asyncio import Redis
@@ -25,11 +26,23 @@ from src.schemas.profile import (
     FIELD_DISPLAY_NAMES,
 )
 from src.config.logger import get_logger
+from src.config.settings import get_settings
 from src.database import get_db, get_redis, Account, UserProfile, RefreshToken
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
+from src.services.dify_service import (
+    upload_file_to_dify,
+    run_cv_parsing_workflow,
+    DifyUpstreamError,
+)
 
 logger = get_logger(__name__)
+settings = get_settings()
+
+ALLOWED_CV_CONTENT_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
 
@@ -80,6 +93,168 @@ def _safe_array_data(value: Any) -> list[dict]:
     if isinstance(value, dict) and isinstance(value.get("data"), list):
         return value["data"]
     return []
+
+
+def _parse_dify_section(outputs: dict, key: str) -> list:
+    """
+    Safely parse a profile section from Dify workflow outputs.
+
+    Dify may return the section as:
+      - a list of dicts
+      - a dict with a "data" key containing a list
+      - a JSON string that needs decoding
+      - None / missing
+    """
+    raw = outputs.get(key)
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict) and isinstance(raw.get("data"), list):
+        return raw["data"]
+    return []
+
+
+def _parse_dify_personal_info(outputs: dict) -> dict:
+    """
+    Safely parse personalInfo from Dify workflow outputs.
+
+    May be a dict or a JSON string.
+    """
+    raw = outputs.get("personalInfo")
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+# ──────────────────────────────────────────────
+# CV Upload & Parsing
+# ──────────────────────────────────────────────
+
+@router.post(
+    "/cv",
+    response_model=AllProfileResponse,
+    responses={
+        400: {"description": "No file uploaded or file is empty", "model": ErrorResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        413: {"description": "File too large", "model": ErrorResponse},
+        415: {"description": "Unsupported file type", "model": ErrorResponse},
+        422: {"description": "Failed to extract information", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+        502: {"description": "AI service unavailable", "model": ErrorResponse},
+    },
+    summary="CV Upload",
+    description=(
+        "Upload a CV file (PDF or DOCX). The server forwards it to the Dify AI "
+        "service for information extraction and returns the structured result."
+    ),
+)
+async def upload_cv(
+    file: UploadFile = File(None),
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        # ── Auth ──
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        # ── Validate file presence ──
+        if file is None or file.filename is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "No file uploaded"},
+            )
+
+        # ── Validate content type ──
+        if file.content_type not in ALLOWED_CV_CONTENT_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail={"message": "Unsupported file type. Only PDF and DOCX are allowed"},
+            )
+
+        # ── Read and validate size ──
+        file_content = await file.read()
+
+        if len(file_content) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Uploaded file is empty"},
+            )
+
+        if len(file_content) > settings.cv_max_file_size:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"message": "File too large. Maximum size is 10 MB"},
+            )
+
+        # ── Upload file to Dify ──
+        upload_file_id = await upload_file_to_dify(
+            file_content=file_content,
+            filename=file.filename,
+            content_type=file.content_type,
+            user=str(user_id),
+        )
+
+        # ── Run Dify workflow ──
+        outputs = await run_cv_parsing_workflow(
+            upload_file_id=upload_file_id,
+            filename=file.filename,
+            user=str(user_id),
+        )
+
+        # ── Parse structured output ──
+        personal = _parse_dify_personal_info(outputs)
+
+        response = AllProfileResponse(
+            personalInfo=PersonalInfoData(
+                name=personal.get("name", ""),
+                gender=personal.get("gender", ""),
+                birthday=personal.get("birthday", ""),
+            ),
+            education=ProfileSectionData(data=_parse_dify_section(outputs, "education")),
+            academic=ProfileSectionData(data=_parse_dify_section(outputs, "academic")),
+            test=ProfileSectionData(data=_parse_dify_section(outputs, "test")),
+            internship=ProfileSectionData(data=_parse_dify_section(outputs, "internship")),
+            project=ProfileSectionData(data=_parse_dify_section(outputs, "project")),
+            campus=ProfileSectionData(data=_parse_dify_section(outputs, "campus")),
+            award=ProfileSectionData(data=_parse_dify_section(outputs, "award")),
+        )
+
+        logger.info("CV parsed successfully for user %d", user_id)
+        return response
+
+    except HTTPException:
+        raise
+    except DifyUpstreamError as e:
+        logger.error("Dify error during CV parsing: status=%d", e.status_code)
+        if e.status_code == 422:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Failed to extract information from the uploaded file"},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "AI service is temporarily unavailable. Please try again later"},
+        )
+    except Exception as e:
+        logger.error("CV upload error: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
 
 @router.get(
