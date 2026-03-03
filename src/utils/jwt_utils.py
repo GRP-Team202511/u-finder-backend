@@ -272,28 +272,3 @@ async def verify_refresh_token_from_db(
         )
 
     return user, refresh_token_record
-
-
-async def verify_admin_from_db(user_id: int, db: AsyncSession):
-    """
-    Verify user is admin
-    
-    Args:
-        user_id: User ID
-        db: Database session
-    
-    Returns:
-        Account object of admin user
-    
-    Raises:
-        HTTPException: If user not admin
-    """
-    user = await verify_user_from_db(user_id, db)
-    
-    if user.user_type != UserType.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"message": "Admin privileges required"}
-        )
-    
-    return user

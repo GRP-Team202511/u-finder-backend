@@ -5,7 +5,7 @@ Provides the SSE streaming chat endpoint that proxies Dify agent responses.
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Header, status, Depends
+from fastapi import APIRouter, HTTPException, Header, Query, status, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -14,11 +14,12 @@ from src.config.logger import get_logger
 from src.database import get_db, get_redis, RefreshToken
 from src.schemas.chat import (
     ChatStreamRequest,
+    ChatMessagesResponse,
     StopChatResponse,
     ErrorResponse,
     ValidationErrorResponse,
 )
-from src.services.dify_service import stream_dify_chat, stop_dify_chat, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
 
@@ -70,6 +71,87 @@ async def _get_current_user_id(
         )
 
     return refresh_record.user_id
+
+
+# ──────────────────────────────────────────────
+# GET /chat/messages — Conversation History
+# ──────────────────────────────────────────────
+@router.get(
+    "/messages",
+    response_model=ChatMessagesResponse,
+    summary="Get Conversation History Messages",
+    description=(
+        "Returns historical chat records in a scrolling load format, "
+        "with the first page returning the latest `limit` messages "
+        "(i.e., in reverse order)."
+    ),
+    responses={
+        401: {"description": "Unauthorized", "model": ErrorResponse},
+        422: {"description": "Validation error"},
+        502: {"description": "Dify service unavailable", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+)
+async def get_messages(
+    conversationId: str = Query(
+        ...,
+        description="Conversation ID (Dify conversation UUID)",
+    ),
+    first_id: str = Query(
+        "",
+        description="The ID of the first chat record on the current page. "
+                    "Empty string returns the latest page.",
+    ),
+    limit: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Number of messages to return (1-100, default 20).",
+    ),
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Retrieve conversation history messages from Dify.
+
+    Query parameters:
+    - **conversationId** (required): the Dify conversation UUID.
+    - **first_id**: message ID for pagination cursor (empty = latest page).
+    - **limit**: page size, 1‒100, default 20.
+    """
+    # Authenticate
+    user_id = await _get_current_user_id(authorization, db, redis)
+    logger.info(
+        "Get messages: user_id=%s conversation_id=%s first_id=%s limit=%d",
+        user_id,
+        conversationId,
+        first_id or "(latest)",
+        limit,
+    )
+
+    try:
+        result = await get_dify_messages(
+            conversation_id=conversationId,
+            user=str(user_id),
+            first_id=first_id,
+            limit=limit,
+        )
+        return result
+    except DifyUpstreamError as exc:
+        logger.error("Dify upstream error in get_messages: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "Dify service unavailable"},
+        )
+    except Exception as exc:
+        logger.error(
+            "Unexpected error in get_messages: %s", exc, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
 
 # ──────────────────────────────────────────────

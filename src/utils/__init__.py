@@ -8,7 +8,6 @@ from .jwt_utils import (
     generate_verification_code,
     get_token_data,
     verify_user_from_db,
-    verify_admin_from_db,
     verify_refresh_token_from_db,
 )
 from .password_utils import hash_password, verify_password, hash_token
@@ -23,7 +22,6 @@ __all__ = [
     "generate_verification_code",
     "get_token_data",
     "verify_user_from_db",
-    "verify_admin_from_db",
     "verify_refresh_token_from_db",
     "hash_password",
     "verify_password",
