@@ -73,6 +73,60 @@ FAKE_DIFY_OUTPUTS_JSON_STRINGS = {
     "award": "[]",
 }
 
+# Dify outputs wrapped in a "result" key (real Dify workflow behaviour)
+FAKE_DIFY_OUTPUTS_WRAPPED = {
+    "result": {
+        "personalInfo": {
+            "name": "Wang Wu",
+            "gender": "female",
+            "birthday": "2001-03-15",
+        },
+        "education": [
+            {"type": "master", "name": "Fudan University", "major": "AI"},
+        ],
+        "academic": [],
+        "test": [],
+        "internship": [],
+        "project": [],
+        "campus": [],
+        "award": [],
+    }
+}
+
+# Dify outputs where "result" value is a JSON string
+FAKE_DIFY_OUTPUTS_WRAPPED_JSON_STRING = {
+    "result": json.dumps({
+        "personalInfo": {
+            "name": "Zhao Liu",
+            "gender": "male",
+            "birthday": "1998-12-01",
+        },
+        "education": [],
+        "academic": [],
+        "test": [],
+        "internship": [],
+        "project": [],
+        "campus": [],
+        "award": [],
+    })
+}
+
+# Dify outputs with null values in personalInfo fields
+FAKE_DIFY_OUTPUTS_NULL_FIELDS = {
+    "personalInfo": {
+        "name": "Test User",
+        "gender": None,
+        "birthday": None,
+    },
+    "education": [],
+    "academic": [],
+    "test": [],
+    "internship": [],
+    "project": [],
+    "campus": [],
+    "award": [],
+}
+
 
 def _pdf_file_tuple(content: bytes = b"%PDF-1.4 fake content", filename: str = "resume.pdf"):
     """Build a multipart file tuple for httpx upload."""
@@ -178,6 +232,64 @@ class TestCVUploadSuccess:
         assert body["personalInfo"]["gender"] == ""
         assert body["education"]["data"] == []
         assert body["academic"]["data"] == []  # missing key → empty
+
+    @patch("src.routers.profile.run_cv_parsing_workflow", new_callable=AsyncMock)
+    @patch("src.routers.profile.upload_file_to_dify", new_callable=AsyncMock)
+    async def test_cv_upload_wrapped_in_result_key(
+        self, mock_upload, mock_workflow, client, mock_db, mock_redis, auth_headers
+    ):
+        """Dify wraps all fields under a 'result' key → parser unwraps → 200."""
+        _setup_redis_hit(mock_redis)
+        mock_upload.return_value = "fake-upload-id"
+        mock_workflow.return_value = FAKE_DIFY_OUTPUTS_WRAPPED
+
+        response = await client.post(CV_URL, headers=auth_headers, files=[_pdf_file_tuple()])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert_all_profile_200(body)
+        assert body["personalInfo"]["name"] == "Wang Wu"
+        assert body["personalInfo"]["gender"] == "female"
+        assert body["personalInfo"]["birthday"] == "2001-03-15"
+        assert len(body["education"]["data"]) == 1
+        assert body["education"]["data"][0]["name"] == "Fudan University"
+
+    @patch("src.routers.profile.run_cv_parsing_workflow", new_callable=AsyncMock)
+    @patch("src.routers.profile.upload_file_to_dify", new_callable=AsyncMock)
+    async def test_cv_upload_wrapped_result_as_json_string(
+        self, mock_upload, mock_workflow, client, mock_db, mock_redis, auth_headers
+    ):
+        """Dify wraps fields under 'result' as a JSON string → parser decodes and unwraps → 200."""
+        _setup_redis_hit(mock_redis)
+        mock_upload.return_value = "fake-upload-id"
+        mock_workflow.return_value = FAKE_DIFY_OUTPUTS_WRAPPED_JSON_STRING
+
+        response = await client.post(CV_URL, headers=auth_headers, files=[_pdf_file_tuple()])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert_all_profile_200(body)
+        assert body["personalInfo"]["name"] == "Zhao Liu"
+        assert body["personalInfo"]["gender"] == "male"
+
+    @patch("src.routers.profile.run_cv_parsing_workflow", new_callable=AsyncMock)
+    @patch("src.routers.profile.upload_file_to_dify", new_callable=AsyncMock)
+    async def test_cv_upload_null_personal_info_fields(
+        self, mock_upload, mock_workflow, client, mock_db, mock_redis, auth_headers
+    ):
+        """Dify returns null for some personalInfo fields → converted to empty strings → 200."""
+        _setup_redis_hit(mock_redis)
+        mock_upload.return_value = "fake-upload-id"
+        mock_workflow.return_value = FAKE_DIFY_OUTPUTS_NULL_FIELDS
+
+        response = await client.post(CV_URL, headers=auth_headers, files=[_pdf_file_tuple()])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert_all_profile_200(body)
+        assert body["personalInfo"]["name"] == "Test User"
+        assert body["personalInfo"]["gender"] == ""  # null → ""
+        assert body["personalInfo"]["birthday"] == ""  # null → ""
 
 
 # ── 400: Bad Request ──────────────────────────────────────────────────────────
