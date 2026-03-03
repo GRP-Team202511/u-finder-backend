@@ -240,9 +240,9 @@ def _build_post_client(*, status_code: int = 200, json_body: dict | None = None,
     """
     mock_response = MagicMock()
     mock_response.status_code = status_code
-    mock_response.json.return_value = json_body or {}
-    mock_response.text = json.dumps(json_body) if json_body else content.decode(errors="replace")
-    mock_response.content = content or json.dumps(json_body or {}).encode()
+    mock_response.json.return_value = json_body if json_body is not None else {}
+    mock_response.text = json.dumps(json_body) if json_body is not None else content.decode(errors="replace")
+    mock_response.content = content or json.dumps(json_body if json_body is not None else {}).encode()
 
     client = AsyncMock()
     client.post = AsyncMock(return_value=mock_response)

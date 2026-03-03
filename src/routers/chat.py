@@ -15,11 +15,13 @@ from src.database import get_db, get_redis, RefreshToken
 from src.schemas.chat import (
     ChatStreamRequest,
     ChatMessagesResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     StopChatResponse,
     ErrorResponse,
     ValidationErrorResponse,
 )
-from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
 
@@ -346,3 +348,128 @@ async def stop_chat(
         )
 
     return StopChatResponse(result=result.get("result", "success"))
+
+
+# ──────────────────────────────────────────────
+# Message Feedback Endpoint
+# ──────────────────────────────────────────────
+@router.post(
+    "/messages/{message_id}/feedbacks",
+    summary="Message Feedback",
+    response_model=FeedbackResponse,
+    responses={
+        200: {
+            "description": "Feedback submitted successfully",
+            "model": FeedbackResponse,
+            "content": {
+                "application/json": {
+                    "example": {"result": "success"}
+                }
+            },
+        },
+        401: {
+            "description": "Unauthorized",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Invalid or expired token"}
+                }
+            },
+        },
+        404: {
+            "description": "Message not found",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Message not found"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error",
+            "model": ValidationErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "literal_error",
+                                "loc": ["body", "rating"],
+                                "msg": "Input should be 'like' or 'dislike'",
+                                "input": "love",
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+        502: {
+            "description": "Dify upstream error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Dify service unavailable"}
+                }
+            },
+        },
+        500: {
+            "description": "Internal server error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Internal server error"}
+                }
+            },
+        },
+    },
+)
+async def message_feedback(
+    message_id: str,
+    body: FeedbackRequest,
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Submit feedback (like / dislike / revoke) for a specific chat message.
+
+    - **like**: upvote the message
+    - **dislike**: downvote the message
+    - **null**: revoke previous feedback
+    """
+    user_id = await _get_current_user_id(authorization, db, redis)
+    logger.info(
+        "Feedback request: user_id=%s message_id=%s rating=%s",
+        user_id,
+        message_id,
+        body.rating,
+    )
+
+    try:
+        result = await submit_dify_feedback(
+            message_id=message_id,
+            rating=body.rating,
+            user=str(user_id),
+            content=body.content,
+        )
+    except DifyUpstreamError as exc:
+        logger.error("Dify feedback upstream error: %s", exc)
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Message not found"},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "Dify service unavailable"},
+        )
+    except Exception as exc:
+        logger.error(
+            "Unexpected error in message_feedback: %s", exc, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+    return FeedbackResponse(result=result.get("result", "success"))

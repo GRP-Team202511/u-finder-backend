@@ -144,3 +144,50 @@ def assert_all_profile_200(payload: Dict[str, Any]) -> None:
         assert set(section_data.keys()) == {"data"}, \
             f"{section} must have exactly one key 'data'; got {list(section_data.keys())}"
         assert isinstance(section_data["data"], list), f"{section}.data must be an array"
+
+
+# ── Chat module response assertions ───────────────────────────────────────────
+
+def assert_stop_chat_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates POST /chat/{task_id}/stop 200 response.
+    Expected schema: {result: str}
+    """
+    _assert_fields(payload, ["result"])
+    assert isinstance(payload["result"], str), "result must be a string"
+    assert payload["result"], "result must be a non-empty string"
+
+
+def assert_stream_error_event(frame_data: Dict[str, Any]) -> None:
+    """
+    Validates an SSE error event frame emitted inside a chat stream.
+    The chat endpoint never closes the stream with a non-200 HTTP status;
+    instead it yields a JSON frame: {event: "error", message: str, ...}
+    """
+    assert "event" in frame_data, f"SSE frame missing 'event' key: {frame_data}"
+    assert frame_data["event"] == "error", \
+        f"Expected event='error', got event='{frame_data['event']}'"
+    assert "message" in frame_data, f"SSE error frame missing 'message' key: {frame_data}"
+    assert isinstance(frame_data["message"], str), "SSE error frame 'message' must be a string"
+
+
+def assert_chat_messages_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates GET /chat/messages 200 response.
+    Expected schema: {limit: int, has_more: bool, data: list}
+    """
+    _assert_fields(payload, ["limit", "has_more", "data"])
+    assert isinstance(payload["limit"], int) and payload["limit"] > 0, \
+        "limit must be a positive integer"
+    assert isinstance(payload["has_more"], bool), "has_more must be a boolean"
+    assert isinstance(payload["data"], list), "data must be an array"
+
+
+def assert_feedback_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates POST /chat/messages/{message_id}/feedbacks 200 response.
+    Expected schema: {result: str}
+    """
+    _assert_fields(payload, ["result"])
+    assert isinstance(payload["result"], str), "result must be a string"
+    assert payload["result"], "result must be a non-empty string"
