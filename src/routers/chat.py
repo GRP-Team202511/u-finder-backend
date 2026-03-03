@@ -393,10 +393,10 @@ async def stop_chat(
                     "example": {
                         "detail": [
                             {
-                                "type": "string_type",
+                                "type": "literal_error",
                                 "loc": ["body", "rating"],
-                                "msg": "Input should be a valid string",
-                                "input": None,
+                                "msg": "Input should be 'like' or 'dislike'",
+                                "input": "love",
                             }
                         ]
                     }
