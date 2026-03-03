@@ -187,6 +187,27 @@ def assert_chat_messages_200(payload: Dict[str, Any]) -> None:
     assert isinstance(payload["data"], list), "data must be an array"
 
 
+def assert_conversations_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates GET /chat/conversations 200 response.
+    Expected schema: {limit: int, has_more: bool, data: list[ConversationItem]}
+    """
+    _assert_fields(payload, ["limit", "has_more", "data"])
+    assert isinstance(payload["limit"], int) and payload["limit"] > 0, \
+        "limit must be a positive integer"
+    assert isinstance(payload["has_more"], bool), "has_more must be a boolean"
+    assert isinstance(payload["data"], list), "data must be an array"
+    for item in payload["data"]:
+        assert isinstance(item, dict), "each conversation must be an object"
+        required_keys = {"id", "name", "inputs", "status", "introduction", "created_at", "updated_at"}
+        assert required_keys.issubset(item.keys()), \
+            f"conversation item missing keys: {required_keys - item.keys()}"
+        assert isinstance(item["id"], str), "id must be a string"
+        assert isinstance(item["name"], str), "name must be a string"
+        assert isinstance(item["created_at"], int), "created_at must be an integer"
+        assert isinstance(item["updated_at"], int), "updated_at must be an integer"
+
+
 def assert_feedback_200(payload: Dict[str, Any]) -> None:
     """
     Validates POST /chat/messages/{message_id}/feedbacks 200 response.

@@ -65,6 +65,25 @@ class ChatMessagesResponse(BaseModel):
     data: list[MessageItem] = Field(..., description="Message list")
 
 
+# ============ Conversations ============
+class ConversationItem(BaseModel):
+    """A single conversation in the list."""
+    id: str
+    name: str
+    inputs: dict = {}
+    status: str
+    introduction: str = ""
+    created_at: int
+    updated_at: int
+
+
+class ConversationsResponse(BaseModel):
+    """Response for GET /chat/conversations."""
+    limit: int = Field(..., description="Number of returned items")
+    has_more: bool = Field(..., description="Whether there is a next page")
+    data: list[ConversationItem] = Field(..., description="Conversation list")
+
+
 # ============ Error ============
 class ErrorResponse(BaseModel):
     """Generic error response."""

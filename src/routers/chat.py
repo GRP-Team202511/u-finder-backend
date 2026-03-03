@@ -15,6 +15,7 @@ from src.database import get_db, get_redis, RefreshToken
 from src.schemas.chat import (
     ChatStreamRequest,
     ChatMessagesResponse,
+    ConversationsResponse,
     FeedbackRequest,
     FeedbackResponse,
     StopChatResponse,
@@ -24,7 +25,7 @@ from src.schemas.chat import (
     ErrorResponse,
     ValidationErrorResponse,
 )
-from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, delete_dify_conversation, rename_dify_conversation, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, delete_dify_conversation, rename_dify_conversation, get_dify_conversations, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
 from src.utils.auth_deps import get_current_user_id as _shared_get_current_user_id
@@ -128,6 +129,79 @@ async def get_messages(
     except Exception as exc:
         logger.error(
             "Unexpected error in get_messages: %s", exc, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ──────────────────────────────────────────────
+# GET /chat/conversations — Conversation List
+# ──────────────────────────────────────────────
+@router.get(
+    "/conversations",
+    response_model=ConversationsResponse,
+    summary="Get Conversation List",
+    description=(
+        "Retrieve the current user's conversation list, sorted by "
+        "last update time in descending order (most recent first). "
+        "Supports cursor-based pagination via `last_id`."
+    ),
+    responses={
+        401: {"description": "Unauthorized", "model": ErrorResponse},
+        422: {"description": "Validation error"},
+        502: {"description": "Dify service unavailable", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+)
+async def get_conversations(
+    last_id: str = Query(
+        "",
+        description="ID of the last conversation on the current page (cursor). "
+                    "Empty string returns the first page.",
+    ),
+    limit: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Number of conversations to return (1-100, default 20).",
+    ),
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Retrieve the current user's conversation list from Dify.
+
+    Query parameters:
+    - **last_id**: conversation ID for pagination cursor (empty = first page).
+    - **limit**: page size, 1‒100, default 20.
+    """
+    user_id = await _get_current_user_id(authorization, db, redis)
+    logger.info(
+        "Get conversations: user_id=%s last_id=%s limit=%d",
+        user_id,
+        last_id or "(first page)",
+        limit,
+    )
+
+    try:
+        result = await get_dify_conversations(
+            user=str(user_id),
+            last_id=last_id,
+            limit=limit,
+        )
+        return result
+    except DifyUpstreamError as exc:
+        logger.error("Dify upstream error in get_conversations: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "Dify service unavailable"},
+        )
+    except Exception as exc:
+        logger.error(
+            "Unexpected error in get_conversations: %s", exc, exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

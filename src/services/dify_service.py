@@ -189,6 +189,7 @@ async def stop_dify_chat(*, task_id: str, user: str) -> dict:
 
 
 # ──────────────────────────────────────────────
+# ──────────────────────────────────────────────
 # Dify GET /messages — conversation history
 # ──────────────────────────────────────────────
 DIFY_MESSAGES_URL = f"{settings.dify_api_base_url}/messages"
@@ -267,6 +268,85 @@ async def get_dify_messages(
     logger.info(
         "Dify messages response: conversation_id=%s count=%d has_more=%s",
         conversation_id,
+        len(data.get("data", [])),
+        data.get("has_more"),
+    )
+    return data
+
+
+# ──────────────────────────────────────────────
+# Dify GET /conversations — conversation list
+# ──────────────────────────────────────────────
+
+
+async def get_dify_conversations(
+    *,
+    user: str,
+    last_id: str = "",
+    limit: int = 20,
+    sort_by: str = "-updated_at",
+) -> dict:
+    """
+    Call Dify ``GET /v1/conversations`` to retrieve the user's
+    conversation list.
+
+    Args:
+        user:     A stable user identifier (e.g. str(user_id)).
+        last_id:  ID of the last item on the current page (cursor).
+        limit:    Number of conversations to retrieve (1-100, default 20).
+        sort_by:  Sort field, default ``-updated_at``.
+
+    Returns:
+        A dict with keys ``limit``, ``has_more``, and ``data``.
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-200 status code.
+    """
+    if not settings.dify_api_key:
+        logger.error("DIFY_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    base_url = _normalized_dify_base_url()
+    url = f"{base_url}/conversations"
+    params = {
+        "user": user,
+        "last_id": last_id,
+        "limit": limit,
+        "sort_by": sort_by,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.dify_api_key}",
+    }
+
+    logger.info(
+        "Dify conversations request: user=%s last_id=%s limit=%d",
+        user,
+        last_id or "(first page)",
+        limit,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            response = await client.get(url, params=params, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error("Dify conversations request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
+
+    if response.status_code != 200:
+        logger.error(
+            "Dify conversations returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    data = response.json()
+    logger.info(
+        "Dify conversations response: user=%s count=%d has_more=%s",
+        user,
         len(data.get("data", [])),
         data.get("has_more"),
     )
