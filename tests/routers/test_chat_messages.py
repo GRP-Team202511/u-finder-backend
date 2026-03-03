@@ -1,7 +1,6 @@
 """
 Router tests for GET /chat/messages (Get Conversation History Messages).
 
-OpenAPI contract reference: get_conversation_history.openapi.json
 Endpoint behaviour:
   - Authenticates via Bearer token (Redis cache → DB fallback).
   - Forwards conversationId / first_id / limit to get_dify_messages().
