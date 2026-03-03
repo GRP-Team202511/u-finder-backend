@@ -310,9 +310,17 @@ class TestGetMessagesErrors:
         Backend currently returns 200 or 422 instead — documented as a known gap."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
-        resp = await client.get(
-            "/chat/messages",
-            params={"conversationId": ""},
-            headers=_auth_headers(),
-        )
+        # Patch get_dify_messages to avoid real upstream/config-dependent behavior.
+        # The test must fail specifically because the backend does not return 400
+        # for empty conversationId, not because of a missing API key or network call.
+        with patch(
+            "src.routers.chat.get_dify_messages",
+            new_callable=AsyncMock,
+            return_value={"limit": 20, "has_more": False, "data": []},
+        ):
+            resp = await client.get(
+                "/chat/messages",
+                params={"conversationId": ""},
+                headers=_auth_headers(),
+            )
         assert resp.status_code == 400
