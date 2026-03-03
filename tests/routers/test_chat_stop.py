@@ -5,6 +5,10 @@ import json
 from unittest.mock import patch, AsyncMock
 
 from src.services.dify_service import DifyUpstreamError
+from tests.routers.utils.response_asserts import (
+    assert_message_response,
+    assert_stop_chat_200,
+)
 
 
 FAKE_BEARER_TOKEN = "fake-chat-test-token"
@@ -36,7 +40,7 @@ class TestStopChatAuth:
             headers=_auth_headers(),
         )
         assert resp.status_code == 401
-        assert resp.json()["message"] == "Invalid or expired token"
+        assert_message_response(resp.json(), "Invalid or expired token")
 
 
 # ──────────────────────────────────────────────
@@ -61,8 +65,7 @@ class TestStopChatSuccess:
             )
 
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["result"] == "success"
+        assert_stop_chat_200(resp.json())
 
     async def test_stop_passes_correct_params(self, client, mock_redis):
         """Verify task_id and user are forwarded correctly to the service."""
@@ -110,7 +113,7 @@ class TestStopChatErrors:
             )
 
         assert resp.status_code == 404
-        assert resp.json()["message"] == "Task not found or already completed"
+        assert_message_response(resp.json(), "Task not found or already completed")
 
     async def test_dify_502_returns_502(self, client, mock_redis):
         """Dify upstream error → 502."""
@@ -127,7 +130,7 @@ class TestStopChatErrors:
             )
 
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Dify service unavailable"
+        assert_message_response(resp.json(), "Dify service unavailable")
 
     async def test_dify_config_error_returns_502(self, client, mock_redis):
         """Dify config missing (status_code=0) → 502."""
@@ -144,4 +147,4 @@ class TestStopChatErrors:
             )
 
         assert resp.status_code == 502
-        assert resp.json()["message"] == "Dify service unavailable"
+        assert_message_response(resp.json(), "Dify service unavailable")
