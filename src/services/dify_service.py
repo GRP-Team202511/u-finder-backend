@@ -1,6 +1,7 @@
 """
 Dify API service module
-Handles communication with the Dify AI platform via SSE streaming.
+Handles communication with the Dify AI platform via SSE streaming
+and file-based CV parsing.
 """
 import json
 from typing import AsyncGenerator, Optional
@@ -347,3 +348,192 @@ async def submit_dify_feedback(
 
     logger.info("Dify feedback success: message_id=%s result=%s", message_id, result)
     return result
+
+
+# ──────────────────────────────────────────────
+# CV Parsing via Dify Workflow
+# ──────────────────────────────────────────────
+
+async def upload_file_to_dify(
+    *,
+    file_content: bytes,
+    filename: str,
+    content_type: str,
+    user: str,
+) -> str:
+    """
+    Upload a file to Dify via ``POST /files/upload``.
+
+    Args:
+        file_content: Raw bytes of the file.
+        filename:     Original filename (e.g. ``"resume.pdf"``).
+        content_type: MIME type (e.g. ``"application/pdf"``).
+        user:         A stable user identifier.
+
+    Returns:
+        The ``upload_file_id`` returned by Dify.
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-201/200 status or an
+                           unexpected response body.
+    """
+    if not settings.dify_workflow_api_key:
+        logger.error("DIFY_WORKFLOW_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_WORKFLOW_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    base_url = _normalized_dify_base_url()
+    url = f"{base_url}/files/upload"
+    headers = {
+        "Authorization": f"Bearer {settings.dify_workflow_api_key}",
+    }
+
+    logger.info(
+        "Dify file upload: user=%s filename=%s size=%d",
+        user, filename, len(file_content),
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            response = await client.post(
+                url,
+                headers=headers,
+                files={"file": (filename, file_content, content_type)},
+                data={"user": user},
+            )
+    except httpx.RequestError as exc:
+        logger.error("Dify file upload request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
+
+    if response.status_code not in (200, 201):
+        logger.error(
+            "Dify file upload returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        logger.error("Dify file upload returned invalid JSON: %s", response.text[:500])
+        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
+
+    upload_file_id = data.get("id")
+    if not upload_file_id:
+        logger.error("Dify file upload response missing 'id': %s", data)
+        raise DifyUpstreamError(502, b"Dify file upload response missing file id")
+
+    logger.info("Dify file uploaded: id=%s", upload_file_id)
+    return upload_file_id
+
+
+async def run_cv_parsing_workflow(
+    *,
+    upload_file_id: str,
+    filename: str,
+    user: str,
+) -> dict:
+    """
+    Execute the Dify CV-parsing workflow in **blocking** mode via
+    ``POST /workflows/run``.
+
+    The workflow receives the uploaded file as an input variable and
+    returns structured profile data in its ``outputs``.
+
+    Args:
+        upload_file_id: The file ID obtained from ``upload_file_to_dify``.
+        filename:       Original filename, used only for logging (not
+                        included in the Dify payload).
+        user:           A stable user identifier.
+
+    Returns:
+        The ``outputs`` dict from the workflow execution result.
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-200 status, the workflow
+                           fails, or the response cannot be parsed.
+    """
+    if not settings.dify_workflow_api_key:
+        logger.error("DIFY_WORKFLOW_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_WORKFLOW_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    base_url = _normalized_dify_base_url()
+    url = f"{base_url}/workflows/run"
+    headers = {
+        "Authorization": f"Bearer {settings.dify_workflow_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "inputs": {
+            "file": {
+                "type": "document",
+                "transfer_method": "local_file",
+                "upload_file_id": upload_file_id,
+            },
+        },
+        "response_mode": "blocking",
+        "user": user,
+    }
+
+    logger.info(
+        "Dify workflow run: user=%s upload_file_id=%s filename=%s",
+        user, upload_file_id, filename,
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.dify_timeout)
+        ) as client:
+            response = await client.post(url, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error("Dify workflow request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
+
+    if response.status_code != 200:
+        logger.error(
+            "Dify workflow returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    try:
+        result = response.json()
+    except ValueError as exc:
+        logger.error("Dify workflow returned invalid JSON: %s", response.text[:500])
+        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
+
+    # Check workflow execution status
+    data = result.get("data", {})
+    status = data.get("status")
+    if status != "succeeded":
+        error_msg = data.get("error", "Unknown workflow error")
+        logger.error("Dify workflow failed: status=%s error=%s", status, error_msg)
+        raise DifyUpstreamError(
+            422,
+            f"Workflow execution failed: {error_msg}".encode(),
+        )
+
+    outputs = data.get("outputs")
+    if not outputs or not isinstance(outputs, dict):
+        logger.error("Dify workflow returned empty or invalid outputs: %s", data)
+        raise DifyUpstreamError(
+            422,
+            b"Workflow returned no structured output",
+        )
+
+    logger.info(
+        "Dify workflow succeeded: workflow_run_id=%s total_tokens=%s",
+        result.get("workflow_run_id"),
+        data.get("total_tokens"),
+    )
+    logger.info("Dify workflow outputs keys=%s", list(outputs.keys()))
+    logger.info("Dify workflow outputs content=%s", json.dumps(outputs, ensure_ascii=False, default=str)[:3000])
+    return outputs
