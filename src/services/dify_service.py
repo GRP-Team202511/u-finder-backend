@@ -270,3 +270,80 @@ async def get_dify_messages(
         data.get("has_more"),
     )
     return data
+
+
+# ──────────────────────────────────────────────
+# Dify POST /messages/:message_id/feedbacks
+# ──────────────────────────────────────────────
+
+
+async def submit_dify_feedback(
+    *,
+    message_id: str,
+    rating: Optional[str],
+    user: str,
+    content: Optional[str] = None,
+) -> dict:
+    """
+    Call Dify ``POST /v1/messages/:message_id/feedbacks`` to submit
+    user feedback (like / dislike / revoke) on a message.
+
+    Args:
+        message_id: The Dify message UUID.
+        rating:     ``"like"``, ``"dislike"``, or ``None`` to revoke.
+        user:       A stable user identifier (e.g. str(user_id)).
+        content:    Optional free-text feedback detail.
+
+    Returns:
+        The JSON response body from Dify (e.g. ``{"result": "success"}``).
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-200 status.
+    """
+    if not settings.dify_api_key:
+        logger.error("DIFY_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    base_url = _normalized_dify_base_url()
+    url = f"{base_url}/messages/{message_id}/feedbacks"
+    headers = {
+        "Authorization": f"Bearer {settings.dify_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict = {"rating": rating, "user": user}
+    if content is not None:
+        payload["content"] = content
+
+    logger.info(
+        "Dify feedback request: message_id=%s rating=%s user=%s",
+        message_id,
+        rating,
+        user,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            response = await client.post(url, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error("Dify feedback request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
+
+    if response.status_code != 200:
+        logger.error(
+            "Dify feedback returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    try:
+        result = response.json()
+    except ValueError as exc:
+        logger.error("Dify feedback returned invalid JSON: %s", response.text[:500])
+        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
+
+    logger.info("Dify feedback success: message_id=%s result=%s", message_id, result)
+    return result

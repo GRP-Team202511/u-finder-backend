@@ -181,3 +181,13 @@ def assert_chat_messages_200(payload: Dict[str, Any]) -> None:
         "limit must be a positive integer"
     assert isinstance(payload["has_more"], bool), "has_more must be a boolean"
     assert isinstance(payload["data"], list), "data must be an array"
+
+
+def assert_feedback_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates POST /chat/messages/{message_id}/feedbacks 200 response.
+    Expected schema: {result: str}
+    """
+    _assert_fields(payload, ["result"])
+    assert isinstance(payload["result"], str), "result must be a string"
+    assert payload["result"], "result must be a non-empty string"

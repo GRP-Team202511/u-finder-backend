@@ -1,7 +1,7 @@
 """
 Chat related Pydantic models
 """
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -74,6 +74,25 @@ class ErrorResponse(BaseModel):
 class ValidationErrorResponse(BaseModel):
     """Validation error response from FastAPI/Pydantic."""
     detail: list[dict[str, Any]]
+
+
+# ============ Feedback ============
+class FeedbackRequest(BaseModel):
+    """Request body for the message feedback endpoint."""
+    rating: Optional[Literal["like", "dislike"]] = Field(
+        ...,
+        description="Feedback rating: 'like', 'dislike', or null to revoke.",
+    )
+    content: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="Optional detailed feedback text.",
+    )
+
+
+class FeedbackResponse(BaseModel):
+    """Response for the message feedback endpoint."""
+    result: str
 
 
 # ============ Stop Chat ============
