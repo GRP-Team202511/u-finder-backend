@@ -380,6 +380,9 @@ async def upload_file_to_dify(
     if not settings.dify_workflow_api_key:
         logger.error("DIFY_WORKFLOW_API_KEY is not configured")
         raise DifyUpstreamError(0, b"DIFY_WORKFLOW_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
 
     base_url = _normalized_dify_base_url()
     url = f"{base_url}/files/upload"
@@ -456,6 +459,9 @@ async def run_cv_parsing_workflow(
     if not settings.dify_workflow_api_key:
         logger.error("DIFY_WORKFLOW_API_KEY is not configured")
         raise DifyUpstreamError(0, b"DIFY_WORKFLOW_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
 
     base_url = _normalized_dify_base_url()
     url = f"{base_url}/workflows/run"

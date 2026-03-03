@@ -14,7 +14,7 @@ Covers every documented response status:
 import json
 import pytest
 from io import BytesIO
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from src.services.dify_service import DifyUpstreamError
 from tests.routers.utils.response_asserts import (
