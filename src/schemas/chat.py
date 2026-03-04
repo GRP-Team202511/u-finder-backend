@@ -99,3 +99,9 @@ class FeedbackResponse(BaseModel):
 class StopChatResponse(BaseModel):
     """Response for the stop generation endpoint."""
     result: str
+
+
+# ============ Delete Conversation ============
+class DeleteConversationResponse(BaseModel):
+    """Response for the delete conversation endpoint."""
+    result: str
