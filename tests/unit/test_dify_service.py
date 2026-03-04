@@ -1,5 +1,6 @@
 """
-Unit tests for src.services.dify_service (stream_dify_chat & stop_dify_chat)
+Unit tests for src.services.dify_service
+(stream_dify_chat, stop_dify_chat & delete_dify_conversation)
 
 These tests exercise the service layer directly (no router involvement)
 by mocking the outbound httpx calls to Dify.
@@ -8,7 +9,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.services.dify_service import stream_dify_chat, stop_dify_chat, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, delete_dify_conversation, DifyUpstreamError
 
 
 # ──────────────────────────────────────────────
@@ -327,3 +328,170 @@ class TestStopDifyErrors:
                 await stop_dify_chat(task_id="t1", user="1")
 
             assert exc_info.value.status_code == 500
+
+
+# ══════════════════════════════════════════════
+# delete_dify_conversation tests
+# ══════════════════════════════════════════════
+
+def _build_delete_client(*, status_code: int = 200, json_body: dict | None = None, content: bytes = b"",
+                          invalid_json: bool = False):
+    """
+    Build a mock httpx.AsyncClient for DELETE (delete conversation endpoint).
+    """
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.text = json.dumps(json_body) if json_body is not None else content.decode(errors="replace")
+    mock_response.content = content or json.dumps(json_body if json_body is not None else {}).encode()
+
+    if invalid_json:
+        mock_response.json.side_effect = ValueError("Invalid JSON")
+    else:
+        mock_response.json.return_value = json_body if json_body is not None else {}
+
+    client = AsyncMock()
+    client.delete = AsyncMock(return_value=mock_response)
+
+    client_ctx = MagicMock()
+    client_ctx.__aenter__ = AsyncMock(return_value=client)
+    client_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    return client_ctx
+
+
+class TestDeleteConversationConfigValidation:
+    """Verify early-exit when required settings are missing."""
+
+    async def test_empty_api_key_raises(self):
+        """DIFY_API_KEY='' should raise DifyUpstreamError before any HTTP call."""
+        with patch("src.services.dify_service.settings") as mock_settings:
+            mock_settings.dify_api_key = ""
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await delete_dify_conversation(conversation_id="conv1", user="1")
+
+            assert exc_info.value.status_code == 0
+            assert b"DIFY_API_KEY" in exc_info.value.body
+
+    async def test_empty_base_url_raises(self):
+        """DIFY_API_BASE_URL='' should raise DifyUpstreamError."""
+        with patch("src.services.dify_service.settings") as mock_settings:
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = ""
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await delete_dify_conversation(conversation_id="conv1", user="1")
+
+            assert b"DIFY_API_BASE_URL" in exc_info.value.body
+
+
+class TestDeleteConversationSuccess:
+    """Verify successful delete returns the JSON body."""
+
+    async def test_returns_result(self):
+        """Dify returns 200 → dict with result='success'."""
+        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            result = await delete_dify_conversation(conversation_id="conv_abc", user="1")
+
+        assert result == {"result": "success"}
+
+    async def test_calls_correct_url_and_payload(self):
+        """Verify the service calls Dify with the correct URL and user payload."""
+        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx) as mock_client_cls:
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            await delete_dify_conversation(conversation_id="conv_xyz", user="42")
+
+        # Get the actual client instance from the context manager
+        client_instance = client_ctx.__aenter__.return_value
+        client_instance.delete.assert_called_once()
+        call_args = client_instance.delete.call_args
+        assert "conversations/conv_xyz" in call_args[0][0]
+        assert call_args[1]["json"] == {"user": "42"}
+
+
+class TestDeleteConversationErrors:
+    """Verify DifyUpstreamError for non-200 responses and edge cases."""
+
+    async def test_404_raises(self):
+        """Dify returns 404 → DifyUpstreamError with status_code=404."""
+        client_ctx = _build_delete_client(status_code=404, content=b"Not Found")
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await delete_dify_conversation(conversation_id="gone", user="1")
+
+            assert exc_info.value.status_code == 404
+
+    async def test_500_raises(self):
+        """Dify returns 500 → DifyUpstreamError with status_code=500."""
+        client_ctx = _build_delete_client(status_code=500, content=b"Internal Server Error")
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await delete_dify_conversation(conversation_id="conv1", user="1")
+
+            assert exc_info.value.status_code == 500
+
+    async def test_network_error_raises_502(self):
+        """httpx.RequestError → DifyUpstreamError with status_code=502."""
+        import httpx
+
+        client = AsyncMock()
+        client.delete = AsyncMock(
+            side_effect=httpx.RequestError("Connection refused")
+        )
+        client_ctx = MagicMock()
+        client_ctx.__aenter__ = AsyncMock(return_value=client)
+        client_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await delete_dify_conversation(conversation_id="conv1", user="1")
+
+            assert exc_info.value.status_code == 502
+
+    async def test_invalid_json_response_raises_502(self):
+        """Dify returns 200 but invalid JSON → DifyUpstreamError(502)."""
+        client_ctx = _build_delete_client(status_code=200, invalid_json=True)
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            with pytest.raises(DifyUpstreamError) as exc_info:
+                await delete_dify_conversation(conversation_id="conv1", user="1")
+
+            assert exc_info.value.status_code == 502
