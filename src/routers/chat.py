@@ -18,10 +18,11 @@ from src.schemas.chat import (
     FeedbackRequest,
     FeedbackResponse,
     StopChatResponse,
+    DeleteConversationResponse,
     ErrorResponse,
     ValidationErrorResponse,
 )
-from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, delete_dify_conversation, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
 
@@ -473,3 +474,124 @@ async def message_feedback(
         )
 
     return FeedbackResponse(result=result.get("result", "success"))
+
+
+# ──────────────────────────────────────────────
+# Delete Conversation Endpoint
+# ──────────────────────────────────────────────
+@router.delete(
+    "/conversations/{conversation_id}",
+    summary="Delete Conversation",
+    response_model=DeleteConversationResponse,
+    responses={
+        200: {
+            "description": "Conversation deleted successfully",
+            "model": DeleteConversationResponse,
+            "content": {
+                "application/json": {
+                    "example": {"result": "success"}
+                }
+            },
+        },
+        401: {
+            "description": "Unauthorized",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Invalid or expired token"}
+                }
+            },
+        },
+        404: {
+            "description": "Conversation not found",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Conversation not found"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error",
+            "model": ValidationErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "string_type",
+                                "loc": ["path", "conversationId"],
+                                "msg": "Input should be a valid string",
+                                "input": None,
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+        502: {
+            "description": "Dify upstream error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Dify service unavailable"}
+                }
+            },
+        },
+        500: {
+            "description": "Internal server error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Internal server error"}
+                }
+            },
+        },
+    },
+)
+async def delete_conversation(
+    conversation_id: str,
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Delete a specific conversation permanently.
+
+    Forwards the delete request to Dify
+    ``DELETE /v1/conversations/:conversation_id`` with the authenticated
+    user's ID and returns the result.
+    """
+    user_id = await _get_current_user_id(authorization, db, redis)
+    logger.info(
+        "Delete conversation request: user_id=%s conversation_id=%s",
+        user_id,
+        conversation_id,
+    )
+
+    try:
+        result = await delete_dify_conversation(
+            conversation_id=conversation_id,
+            user=str(user_id),
+        )
+    except DifyUpstreamError as exc:
+        logger.error("Dify delete conversation upstream error: %s", exc)
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Conversation not found"},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "Dify service unavailable"},
+        )
+    except Exception as exc:
+        logger.error(
+            "Unexpected error in delete_conversation: %s", exc, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+    return DeleteConversationResponse(result=result.get("result", "success"))
