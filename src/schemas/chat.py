@@ -105,3 +105,19 @@ class StopChatResponse(BaseModel):
 class DeleteConversationResponse(BaseModel):
     """Response for the delete conversation endpoint."""
     result: str
+
+
+# ============ Rename Conversation ============
+class RenameConversationRequest(BaseModel):
+    """Request body for the rename conversation endpoint."""
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="The new name / title for the conversation.",
+    )
+
+
+class RenameConversationResponse(BaseModel):
+    """Response for the rename conversation endpoint."""
+    result: str

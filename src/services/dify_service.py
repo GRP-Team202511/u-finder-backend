@@ -428,6 +428,86 @@ async def delete_dify_conversation(
 
 
 # ──────────────────────────────────────────────
+# Dify POST /conversations/:conversation_id/name
+# ──────────────────────────────────────────────
+
+
+async def rename_dify_conversation(
+    *,
+    conversation_id: str,
+    name: str,
+    user: str,
+) -> dict:
+    """
+    Call Dify ``POST /v1/conversations/:conversation_id/name`` to rename
+    a conversation.
+
+    Args:
+        conversation_id: The Dify conversation UUID.
+        name:            The new conversation title.
+        user:            A stable user identifier (e.g. str(user_id)).
+
+    Returns:
+        The JSON response body from Dify (e.g. ``{"result": "success"}``).
+
+    Raises:
+        DifyUpstreamError: If Dify returns a non-200 status.
+    """
+    if not settings.dify_api_key:
+        logger.error("DIFY_API_KEY is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_KEY is not set")
+    if not settings.dify_api_base_url:
+        logger.error("DIFY_API_BASE_URL is not configured")
+        raise DifyUpstreamError(0, b"DIFY_API_BASE_URL is not set")
+
+    base_url = _normalized_dify_base_url()
+    url = f"{base_url}/conversations/{conversation_id}/name"
+    headers = {
+        "Authorization": f"Bearer {settings.dify_api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {"name": name, "user": user}
+
+    logger.info(
+        "Dify rename conversation request: conversation_id=%s name=%s user=%s",
+        conversation_id,
+        name,
+        user,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
+            response = await client.post(url, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        logger.error("Dify rename conversation request failed: %s", exc)
+        raise DifyUpstreamError(502, str(exc).encode()) from exc
+
+    if response.status_code != 200:
+        logger.error(
+            "Dify rename conversation returned status=%d body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise DifyUpstreamError(response.status_code, response.content)
+
+    try:
+        result = response.json()
+    except ValueError as exc:
+        logger.error(
+            "Dify rename conversation returned invalid JSON: %s",
+            response.text[:500],
+        )
+        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
+
+    logger.info(
+        "Dify rename conversation success: conversation_id=%s result=%s",
+        conversation_id,
+        result,
+    )
+    return result
+
+
+# ──────────────────────────────────────────────
 # CV Parsing via Dify Workflow
 # ──────────────────────────────────────────────
 

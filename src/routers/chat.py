@@ -19,10 +19,12 @@ from src.schemas.chat import (
     FeedbackResponse,
     StopChatResponse,
     DeleteConversationResponse,
+    RenameConversationRequest,
+    RenameConversationResponse,
     ErrorResponse,
     ValidationErrorResponse,
 )
-from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, delete_dify_conversation, DifyUpstreamError
+from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, delete_dify_conversation, rename_dify_conversation, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
 
@@ -595,3 +597,127 @@ async def delete_conversation(
         )
 
     return DeleteConversationResponse(result=result.get("result", "success"))
+
+
+# ──────────────────────────────────────────────
+# Rename Conversation Endpoint
+# ──────────────────────────────────────────────
+@router.post(
+    "/conversations/{conversation_id}/name",
+    summary="Rename Conversation",
+    response_model=RenameConversationResponse,
+    responses={
+        200: {
+            "description": "Conversation renamed successfully",
+            "model": RenameConversationResponse,
+            "content": {
+                "application/json": {
+                    "example": {"result": "success"}
+                }
+            },
+        },
+        401: {
+            "description": "Unauthorized",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Invalid or expired token"}
+                }
+            },
+        },
+        404: {
+            "description": "Conversation not found",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Conversation not found"}
+                }
+            },
+        },
+        422: {
+            "description": "Validation error",
+            "model": ValidationErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "missing",
+                                "loc": ["body", "name"],
+                                "msg": "Field required",
+                                "input": {},
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+        502: {
+            "description": "Dify upstream error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Dify service unavailable"}
+                }
+            },
+        },
+        500: {
+            "description": "Internal server error",
+            "model": ErrorResponse,
+            "content": {
+                "application/json": {
+                    "example": {"message": "Internal server error"}
+                }
+            },
+        },
+    },
+)
+async def rename_conversation(
+    conversation_id: str,
+    body: RenameConversationRequest,
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Rename a specific conversation.
+
+    Forwards the rename request to Dify
+    ``POST /v1/conversations/:conversation_id/name`` with the new name
+    and the authenticated user's ID.
+    """
+    user_id = await _get_current_user_id(authorization, db, redis)
+    logger.info(
+        "Rename conversation request: user_id=%s conversation_id=%s name=%s",
+        user_id,
+        conversation_id,
+        body.name,
+    )
+
+    try:
+        result = await rename_dify_conversation(
+            conversation_id=conversation_id,
+            name=body.name,
+            user=str(user_id),
+        )
+    except DifyUpstreamError as exc:
+        logger.error("Dify rename conversation upstream error: %s", exc)
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Conversation not found"},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"message": "Dify service unavailable"},
+        )
+    except Exception as exc:
+        logger.error(
+            "Unexpected error in rename_conversation: %s", exc, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+    return RenameConversationResponse(result=result.get("result", "success"))
