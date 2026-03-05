@@ -201,3 +201,13 @@ def assert_delete_conversation_200(payload: Dict[str, Any]) -> None:
     _assert_fields(payload, ["result"])
     assert isinstance(payload["result"], str), "result must be a string"
     assert payload["result"], "result must be a non-empty string"
+
+
+def assert_rename_conversation_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates POST /chat/conversations/{conversation_id}/name 200 response.
+    Expected schema: {result: str}
+    """
+    _assert_fields(payload, ["result"])
+    assert isinstance(payload["result"], str), "result must be a string"
+    assert payload["result"], "result must be a non-empty string"
