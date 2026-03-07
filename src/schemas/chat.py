@@ -41,21 +41,21 @@ class AgentThought(BaseModel):
     tool_input: str
     created_at: int
     observation: str
-    files: list[str] = []
+    files: list[str] = Field(default_factory=list)
 
 
 class MessageItem(BaseModel):
     """A single message in conversation history."""
     id: str
     conversation_id: str
-    inputs: dict = {}
+    inputs: dict = Field(default_factory=dict)
     query: str
     answer: str
-    message_files: list[MessageFile] = []
+    message_files: list[MessageFile] = Field(default_factory=list)
     feedback: Optional[Feedback] = None
-    retriever_resources: list[str] = []
+    retriever_resources: list[str] = Field(default_factory=list)
     created_at: int
-    agent_thoughts: list[AgentThought] = []
+    agent_thoughts: list[AgentThought] = Field(default_factory=list)
 
 
 class ChatMessagesResponse(BaseModel):

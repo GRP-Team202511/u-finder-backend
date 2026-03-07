@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy import Column, BigInteger, String, DateTime, Boolean, SmallInteger, Text, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -146,4 +148,49 @@ class TempToken(Base):
 
     def __repr__(self):
         return f"<TempToken(id={self.id}, user_id={self.user_id}, token_type={self.token_type})>"
+
+
+class UniversityProgram(Base):
+    """Canonical university program entity — deduplicated and stable.
+
+    Deduplication keys:
+    - L1: normalized_url (UNIQUE) — official_program_url after normalization
+    - L2: normalized_name — university name + program name + degree level, lowercased
+    """
+    __tablename__ = "university_program"
+    __table_args__ = (
+        Index('ix_university_program_normalized_url', 'normalized_url', unique=True),
+        Index('ix_university_program_normalized_name', 'normalized_name'),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    normalized_url = Column(String(1000), nullable=True, unique=True, comment="L1 dedup key: normalized official_program_url")
+    normalized_name = Column(String(1000), nullable=False, comment="L2 dedup key: normalized university+program+degree")
+    program_data = Column(JSONB, nullable=False, comment="Full program card JSON from LLM")
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+    liked_by = relationship("UserLikedUniversity", back_populates="university_program", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<UniversityProgram(id={self.id}, normalized_name={self.normalized_name})>"
+
+
+class UserLikedUniversity(Base):
+    """Association table: user <-> liked university program"""
+    __tablename__ = "user_liked_university"
+    __table_args__ = (
+        Index('ix_user_liked_univ_user_program', 'user_id', 'university_program_id', unique=True),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("account.user_id", ondelete="CASCADE"), nullable=False)
+    university_program_id = Column(String(36), ForeignKey("university_program.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+    account = relationship("Account")
+    university_program = relationship("UniversityProgram", back_populates="liked_by")
+
+    def __repr__(self):
+        return f"<UserLikedUniversity(user_id={self.user_id}, university_program_id={self.university_program_id})>"
 

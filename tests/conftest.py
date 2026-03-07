@@ -77,10 +77,12 @@ def mock_redis():
 
     Default behaviour:
     - get() returns None (cache miss)
+    - hgetall() returns {} (no session / cache miss)
     - set(), delete() complete without raising
     """
     redis = AsyncMock()
     redis.get.return_value = None
+    redis.hgetall.return_value = {}
     return redis
 
 
@@ -253,3 +255,76 @@ def fake_profile():
         }
     ]
     return profile
+
+
+# ──────────────────────────────────────────────
+# Liked University Fixtures
+# ──────────────────────────────────────────────
+
+SAMPLE_PROGRAM_CARD = {
+    "university": {
+        "name": "Massachusetts Institute of Technology",
+        "country": "United States",
+        "city": "Cambridge",
+        "official_website": "https://www.mit.edu",
+    },
+    "faculty": {
+        "name": "School of Engineering",
+        "official_website": "https://engineering.mit.edu",
+    },
+    "degree_program": {
+        "name": "Master of Science in Computer Science",
+        "degree_level": "Master",
+        "field": "Computer Science",
+        "track_or_specialization": "Artificial Intelligence",
+        "program_type": "Full-time",
+        "duration": "2 years",
+        "language": "English",
+    },
+    "admissions": {
+        "academic_requirements": "Bachelor's degree in CS or related field, GPA 3.5+",
+        "language_requirements": "TOEFL 100+ or IELTS 7.0+",
+        "other_requirements": "GRE recommended",
+        "application_deadline": "December 15, 2026",
+    },
+    "tuition": {
+        "amount": 57590,
+        "currency": "USD",
+        "per": "year",
+    },
+    "career_outcomes": ["Software Engineer", "ML Engineer"],
+    "official_program_url": "https://www.eecs.mit.edu/academics/graduate-programs/ms-program/",
+    "last_verified": "2026-03-01",
+}
+
+
+@pytest.fixture
+def sample_program_card():
+    """Returns a realistic LLM program card dict (request body for /check)."""
+    return SAMPLE_PROGRAM_CARD.copy()
+
+
+@pytest.fixture
+def fake_university_program():
+    """Returns a mock UniversityProgram ORM object."""
+    from datetime import datetime, timezone
+    program = MagicMock()
+    program.id = "550e8400-e29b-41d4-a716-446655440000"
+    program.normalized_url = "eecs.mit.edu/academics/graduate-programs/ms-program"
+    program.normalized_name = "massachusetts institute of technology | master of science in computer science | master"
+    program.program_data = SAMPLE_PROGRAM_CARD.copy()
+    program.created_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    program.updated_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    return program
+
+
+@pytest.fixture
+def fake_liked_record():
+    """Returns a mock UserLikedUniversity ORM object."""
+    from datetime import datetime, timezone
+    record = MagicMock()
+    record.id = 1
+    record.user_id = 1
+    record.university_program_id = "550e8400-e29b-41d4-a716-446655440000"
+    record.created_at = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    return record
