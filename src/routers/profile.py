@@ -21,20 +21,28 @@ from src.schemas.profile import (
     UpdateAllProfileResponse,
     ProfileSectionData,
     PersonalInfoData,
+    ProgramCardRequest,
+    CheckFavoriteResponse,
+    LikeResponse,
+    UnlikeResponse,
+    LikedUniversityItem,
+    LikedUniversityListResponse,
     ErrorResponse,
     VALID_ARRAY_FIELDS,
     FIELD_DISPLAY_NAMES,
 )
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.database import get_db, get_redis, Account, UserProfile, RefreshToken
+from src.database import get_db, get_redis, Account, UserProfile, RefreshToken, UniversityProgram, UserLikedUniversity
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
+from src.utils.auth_deps import get_current_user_id
 from src.services.dify_service import (
     upload_file_to_dify,
     run_cv_parsing_workflow,
     DifyUpstreamError,
 )
+from src.services.university_service import resolve_university_program
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -52,39 +60,8 @@ async def _get_current_user_id(
     db: AsyncSession,
     redis: Optional[Redis],
 ) -> int:
-    """
-    Extract and verify the refresh token from Authorization header.
-    Returns the user_id associated with the session.
-    """
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Invalid or expired token"},
-        )
-
-    token = authorization.replace("Bearer ", "")
-
-    # 1. Try Redis cache first
-    if redis is not None:
-        session_data = await get_session(redis, token)
-        if session_data:
-            return int(session_data["user_id"])
-
-    # 2. Fallback to database
-    result = await db.execute(
-        select(RefreshToken).where(
-            RefreshToken.token_hashed == hash_token(token)
-        )
-    )
-    refresh_record = result.scalar_one_or_none()
-
-    if not refresh_record:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Invalid or expired token"},
-        )
-
-    return refresh_record.user_id
+    """Thin wrapper delegating to the shared helper."""
+    return await get_current_user_id(authorization, db, redis)
 
 
 def _safe_array_data(value: Any) -> list[dict]:
@@ -651,6 +628,227 @@ async def update_array_profile(
     except Exception as e:
         logger.error(f"Update array profile ({field}) error: {str(e)}")
         await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ──────────────────────────────────────────────
+# Liked University Endpoints
+# ──────────────────────────────────────────────
+
+
+def _validate_uuid(unit_id: str) -> None:
+    """Raise 422 if unit_id is not a valid UUID."""
+    import uuid as _uuid
+    try:
+        _uuid.UUID(unit_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "Invalid university program ID format"},
+        )
+
+
+@router.post(
+    "/liked-university/check",
+    response_model=CheckFavoriteResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        422: {"description": "Validation error"},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Check Favorite University",
+    description="Deduplicate the program card and return its stable unit_id with is_liked status.",
+)
+async def check_favorite_university(
+    request: ProgramCardRequest,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        # Resolve (deduplicate) the program
+        program = await resolve_university_program(db, request)
+
+        # Check if liked
+        result = await db.execute(
+            select(UserLikedUniversity).where(
+                UserLikedUniversity.user_id == user_id,
+                UserLikedUniversity.university_program_id == program.id,
+            )
+        )
+        is_liked = result.scalar_one_or_none() is not None
+
+        await db.commit()
+        return CheckFavoriteResponse(unit_id=program.id, is_liked=is_liked)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Check favorite university error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.post(
+    "/liked-university/{unit_id}",
+    response_model=LikeResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "University program not found", "model": ErrorResponse},
+        422: {"description": "Invalid unit_id format", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Like University Program",
+    description="Add the specified university program to the current user's favorites. Idempotent.",
+)
+async def like_university_program(
+    unit_id: str,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    _validate_uuid(unit_id)
+
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        # Verify program exists
+        result = await db.execute(
+            select(UniversityProgram).where(UniversityProgram.id == unit_id)
+        )
+        if not result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "University program not found"},
+            )
+
+        # Idempotent insert
+        result = await db.execute(
+            select(UserLikedUniversity).where(
+                UserLikedUniversity.user_id == user_id,
+                UserLikedUniversity.university_program_id == unit_id,
+            )
+        )
+        if not result.scalar_one_or_none():
+            db.add(UserLikedUniversity(user_id=user_id, university_program_id=unit_id))
+
+        await db.commit()
+        logger.info(f"User {user_id} liked program {unit_id}")
+        return LikeResponse(unit_id=unit_id, is_liked=True)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Like university error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.delete(
+    "/liked-university/{unit_id}",
+    response_model=UnlikeResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        422: {"description": "Invalid unit_id format", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Unlike University Program",
+    description="Remove the specified university program from the current user's favorites. Idempotent.",
+)
+async def unlike_university_program(
+    unit_id: str,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    _validate_uuid(unit_id)
+
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        result = await db.execute(
+            select(UserLikedUniversity).where(
+                UserLikedUniversity.user_id == user_id,
+                UserLikedUniversity.university_program_id == unit_id,
+            )
+        )
+        record = result.scalar_one_or_none()
+        if record:
+            await db.delete(record)
+
+        await db.commit()
+        logger.info(f"User {user_id} unliked program {unit_id}")
+        return UnlikeResponse(unit_id=unit_id, is_liked=False)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unlike university error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.get(
+    "/liked-university",
+    response_model=LikedUniversityListResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Get Liked University List",
+    description="Return all university programs liked by the current user, ordered by most recently liked first.",
+)
+async def get_liked_universities(
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        result = await db.execute(
+            select(UserLikedUniversity)
+            .where(UserLikedUniversity.user_id == user_id)
+            .order_by(UserLikedUniversity.created_at.desc())
+        )
+        liked_records = result.scalars().all()
+
+        items = []
+        for record in liked_records:
+            # Fetch associated program
+            prog_result = await db.execute(
+                select(UniversityProgram).where(UniversityProgram.id == record.university_program_id)
+            )
+            program = prog_result.scalar_one_or_none()
+            if program:
+                items.append(
+                    LikedUniversityItem(
+                        unit_id=program.id,
+                        liked_at=record.created_at.isoformat() if record.created_at else "",
+                        program=program.program_data or {},
+                    )
+                )
+
+        return LikedUniversityListResponse(data=items)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get liked universities error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},

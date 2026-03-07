@@ -27,6 +27,7 @@ from src.schemas.chat import (
 from src.services.dify_service import stream_dify_chat, stop_dify_chat, get_dify_messages, submit_dify_feedback, delete_dify_conversation, rename_dify_conversation, DifyUpstreamError
 from src.utils.session_utils import get_session
 from src.utils.password_utils import hash_token
+from src.utils.auth_deps import get_current_user_id as _shared_get_current_user_id
 
 logger = get_logger(__name__)
 
@@ -34,48 +35,15 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
 # ──────────────────────────────────────────────
-# Auth helper (mirrors profile.py pattern)
+# Auth helper (delegates to shared dependency)
 # ──────────────────────────────────────────────
 async def _get_current_user_id(
     authorization: str,
     db: AsyncSession,
     redis: Optional[Redis],
 ) -> int:
-    """
-    Extract and verify the refresh token from Authorization header.
-    Returns the user_id associated with the session.
-    """
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Invalid or expired token"},
-        )
-
-    token = authorization.replace("Bearer ", "")
-
-    # 1. Try Redis cache first
-    if redis is not None:
-        session_data = await get_session(redis, token)
-        if session_data:
-            return int(session_data["user_id"])
-
-    # 2. Fallback to database
-    from sqlalchemy import select
-
-    result = await db.execute(
-        select(RefreshToken).where(
-            RefreshToken.token_hashed == hash_token(token)
-        )
-    )
-    refresh_record = result.scalar_one_or_none()
-
-    if not refresh_record:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"message": "Invalid or expired token"},
-        )
-
-    return refresh_record.user_id
+    """Thin wrapper delegating to the shared helper."""
+    return await _shared_get_current_user_id(authorization, db, redis)
 
 
 # ──────────────────────────────────────────────
