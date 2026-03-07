@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for liked-university endpoints:
   POST /profile/liked-university/check
   POST /profile/liked-university/{unit_id}
@@ -9,9 +9,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 # POST /profile/liked-university/check
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 
 class TestCheckFavoriteUniversity:
     """POST /profile/liked-university/check"""
@@ -20,7 +20,7 @@ class TestCheckFavoriteUniversity:
     async def test_check_not_liked(
         self, client, mock_db, mock_redis, auth_headers, sample_program_card,
     ):
-        """Card not yet liked 鈫?is_liked=false, returns a unit_id."""
+        """Card not yet liked ->is_liked=false, returns a unit_id."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         fake_program = MagicMock()
@@ -33,7 +33,7 @@ class TestCheckFavoriteUniversity:
             return_value=fake_program,
         ):
             # First call: resolve_university_program
-            # Second call: SELECT UserLikedUniversity 鈫?None (not liked)
+            # Second call: SELECT UserLikedUniversity ->None (not liked)
             exec_result_none = MagicMock()
             exec_result_none.scalar_one_or_none.return_value = None
             mock_db.execute.return_value = exec_result_none
@@ -53,7 +53,7 @@ class TestCheckFavoriteUniversity:
     async def test_check_already_liked(
         self, client, mock_db, mock_redis, auth_headers, sample_program_card, fake_liked_record,
     ):
-        """Card already liked 鈫?is_liked=true."""
+        """Card already liked ->is_liked=true."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         fake_program = MagicMock()
@@ -79,7 +79,7 @@ class TestCheckFavoriteUniversity:
 
     @pytest.mark.asyncio
     async def test_check_missing_required_field(self, client, mock_redis, auth_headers):
-        """Missing university.name 鈫?422."""
+        """Missing university.name ->422."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
         bad_card = {
             "university": {"official_website": "https://mit.edu"},
@@ -100,7 +100,7 @@ class TestCheckFavoriteUniversity:
 
     @pytest.mark.asyncio
     async def test_check_unauthorized(self, client, mock_db, mock_redis, sample_program_card):
-        """No auth header 鈫?422 (FastAPI requires header)."""
+        """No auth header ->422 (FastAPI requires header)."""
         resp = await client.post(
             "/profile/liked-university/check",
             json=sample_program_card,
@@ -109,7 +109,7 @@ class TestCheckFavoriteUniversity:
 
     @pytest.mark.asyncio
     async def test_check_invalid_token(self, client, mock_db, mock_redis, sample_program_card):
-        """Invalid token 鈫?401."""
+        """Invalid token ->401."""
         mock_redis.hgetall.return_value = {}
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
         resp = await client.post(
@@ -120,9 +120,9 @@ class TestCheckFavoriteUniversity:
         assert resp.status_code == 401
 
 
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 # POST /profile/liked-university/{unit_id}
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 
 class TestLikeUniversity:
     """POST /profile/liked-university/{unit_id}"""
@@ -133,7 +133,7 @@ class TestLikeUniversity:
     async def test_like_success(
         self, client, mock_db, mock_redis, auth_headers, fake_university_program,
     ):
-        """Like a program that exists 鈫?200, is_liked=true."""
+        """Like a program that exists ->200, is_liked=true."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         call_count = 0
@@ -143,10 +143,10 @@ class TestLikeUniversity:
             call_count += 1
             result = MagicMock()
             if call_count == 1:
-                # SELECT UniversityProgram 鈫?found
+                # SELECT UniversityProgram ->found
                 result.scalar_one_or_none.return_value = fake_university_program
             else:
-                # SELECT UserLikedUniversity 鈫?not found (first time liking)
+                # SELECT UserLikedUniversity ->not found (first time liking)
                 result.scalar_one_or_none.return_value = None
             return result
 
@@ -163,7 +163,7 @@ class TestLikeUniversity:
 
     @pytest.mark.asyncio
     async def test_like_not_found(self, client, mock_db, mock_redis, auth_headers):
-        """Program doesn't exist 鈫?404."""
+        """Program doesn't exist ->404."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
@@ -176,7 +176,7 @@ class TestLikeUniversity:
 
     @pytest.mark.asyncio
     async def test_like_invalid_uuid(self, client, mock_db, mock_redis, auth_headers):
-        """Bad UUID 鈫?422."""
+        """Bad UUID ->422."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
         resp = await client.post(
             "/profile/liked-university/not-a-uuid",
@@ -189,7 +189,7 @@ class TestLikeUniversity:
     async def test_like_idempotent(
         self, client, mock_db, mock_redis, auth_headers, fake_university_program, fake_liked_record,
     ):
-        """Liking the same program twice 鈫?still 200."""
+        """Liking the same program twice ->still 200."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         call_count = 0
@@ -214,9 +214,9 @@ class TestLikeUniversity:
         assert resp.json()["is_liked"] is True
 
 
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 # DELETE /profile/liked-university/{unit_id}
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 
 class TestUnlikeUniversity:
     """DELETE /profile/liked-university/{unit_id}"""
@@ -227,7 +227,7 @@ class TestUnlikeUniversity:
     async def test_unlike_success(
         self, client, mock_db, mock_redis, auth_headers, fake_liked_record,
     ):
-        """Unlike an existing liked program 鈫?200, is_liked=false."""
+        """Unlike an existing liked program ->200, is_liked=false."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
         mock_db.execute.return_value.scalar_one_or_none.return_value = fake_liked_record
 
@@ -242,7 +242,7 @@ class TestUnlikeUniversity:
 
     @pytest.mark.asyncio
     async def test_unlike_not_liked(self, client, mock_db, mock_redis, auth_headers):
-        """Unliking something not liked 鈫?still 200 (idempotent)."""
+        """Unliking something not liked ->still 200 (idempotent)."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
         mock_db.execute.return_value.scalar_one_or_none.return_value = None
 
@@ -255,7 +255,7 @@ class TestUnlikeUniversity:
 
     @pytest.mark.asyncio
     async def test_unlike_invalid_uuid(self, client, mock_db, mock_redis, auth_headers):
-        """Bad UUID 鈫?422."""
+        """Bad UUID ->422."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
         resp = await client.delete(
             "/profile/liked-university/bad-id",
@@ -264,16 +264,16 @@ class TestUnlikeUniversity:
         assert resp.status_code == 422
 
 
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 # GET /profile/liked-university
-# 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+# ----------------------------------------------
 
 class TestGetLikedUniversities:
     """GET /profile/liked-university"""
 
     @pytest.mark.asyncio
     async def test_get_empty_list(self, client, mock_db, mock_redis, auth_headers):
-        """No liked programs 鈫?empty list."""
+        """No liked programs ->empty list."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         exec_result = MagicMock()
@@ -292,7 +292,7 @@ class TestGetLikedUniversities:
         self, client, mock_db, mock_redis, auth_headers,
         fake_liked_record, fake_university_program,
     ):
-        """One liked program 鈫?list with one item."""
+        """One liked program ->list with one item."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         call_count = 0
@@ -324,7 +324,7 @@ class TestGetLikedUniversities:
 
     @pytest.mark.asyncio
     async def test_get_unauthorized(self, client, mock_db, mock_redis):
-        """No auth 鈫?422."""
+        """No auth ->422."""
         resp = await client.get("/profile/liked-university")
         assert resp.status_code == 422
 

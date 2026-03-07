@@ -77,10 +77,12 @@ def mock_redis():
 
     Default behaviour:
     - get() returns None (cache miss)
+    - hgetall() returns {} (no session / cache miss)
     - set(), delete() complete without raising
     """
     redis = AsyncMock()
     redis.get.return_value = None
+    redis.hgetall.return_value = {}
     return redis
 
 
