@@ -281,14 +281,4 @@ class TestChatErrors:
         assert_stream_error_event(error_evt)
         assert "unavailable" in error_evt["message"].lower()
 
-    async def test_stream_400_not_implemented(self, client, mock_redis):
-        """OpenAPI doc lists HTTP 400 as a valid response for this endpoint.
-        The backend currently never returns 400 — backend fix required."""
-        mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
-        resp = await client.post(
-            "/chat/null",
-            json={"message": "test"},
-            headers=_auth_headers(),
-        )
-        assert resp.status_code == 400

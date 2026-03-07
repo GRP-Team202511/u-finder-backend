@@ -59,6 +59,7 @@ async def _get_current_user_id(
         "(i.e., in reverse order)."
     ),
     responses={
+        400: {"description": "Bad request (empty conversationId)", "model": ErrorResponse},
         401: {"description": "Unauthorized", "model": ErrorResponse},
         422: {"description": "Validation error"},
         502: {"description": "Dify service unavailable", "model": ErrorResponse},
@@ -95,6 +96,13 @@ async def get_messages(
     """
     # Authenticate
     user_id = await _get_current_user_id(authorization, db, redis)
+
+    if not conversationId or not conversationId.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "conversationId must not be empty"},
+        )
+
     logger.info(
         "Get messages: user_id=%s conversation_id=%s first_id=%s limit=%d",
         user_id,
