@@ -180,6 +180,28 @@ async def login(
                 detail={"message": "Incorrect password"}
             )
         
+        # ── 2FA check ──
+        if user.is_2fa_enabled:
+            two_fa_temp_token = create_temp_token()
+            two_fa_record = TempToken(
+                user_id=user.user_id,
+                token_hashed=hash_token(two_fa_temp_token),
+                token_type="2fa_verify",
+                expire_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+            db.add(two_fa_record)
+            await db.commit()
+
+            logger.info(f"2FA required for user: {email}")
+            return LoginResponse(
+                id=user.user_id,
+                name=user.user_name,
+                token="",
+                requires_2fa=True,
+                temp_token=two_fa_temp_token,
+            )
+        # ── End 2FA check ──
+
         # Create refresh token and store in database
         refresh_token = create_temp_token()
         token_hashed = hash_token(refresh_token)

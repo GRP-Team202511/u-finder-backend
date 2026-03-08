@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     dify_workflow_api_key: str = ""
     dify_timeout: int = 60  # seconds
 
+    # 2FA / TOTP Settings
+    totp_encryption_key: str = ""  # Base64-encoded 32-byte AES-256 key
+
     # CV Upload Settings
     cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB
 

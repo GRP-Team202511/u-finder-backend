@@ -17,6 +17,7 @@ def _make_user(
     *,
     password: str = "Password1",
     is_blocked: bool = False,
+    is_2fa_enabled: bool = False,
     user_id: int = 1,
     user_name: str = "Test User",
     email: str = "test@example.com",
@@ -30,6 +31,7 @@ def _make_user(
     user.email = email
     user.password_hashed = hash_password(password)
     user.is_blocked = is_blocked
+    user.is_2fa_enabled = is_2fa_enabled
     return user
 
 

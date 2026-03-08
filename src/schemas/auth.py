@@ -16,6 +16,8 @@ class LoginResponse(BaseModel):
     id: int
     name: str
     token: str
+    requires_2fa: bool = False
+    temp_token: Optional[str] = None
 
 
 # ============ Logout ============

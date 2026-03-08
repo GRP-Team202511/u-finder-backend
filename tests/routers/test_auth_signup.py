@@ -11,6 +11,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from src.utils.password_utils import hash_password
 from tests.routers.utils.response_asserts import (
     assert_login_200,
+    assert_verify_signup_200,
     assert_message_response,
     assert_rate_limit_response,
     assert_signup_200,
@@ -155,7 +156,7 @@ class TestVerifySignupEmail:
 
         assert response.status_code == 201
         body = response.json()
-        assert_login_200(body)
+        assert_verify_signup_200(body)
         assert body["id"] == user.user_id
         assert body["name"] == user.user_name
 
