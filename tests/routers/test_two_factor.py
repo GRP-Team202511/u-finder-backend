@@ -114,9 +114,10 @@ class TestSetup2FA:
 
 class TestConfirm2FA:
 
+    @patch("src.routers.two_factor._check_totp_replay", return_value=False)
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
     @patch("src.routers.two_factor.encrypt_secret", return_value="encrypted_blob")
-    async def test_confirm_success(self, mock_encrypt, mock_verify, client, mock_db, mock_redis):
+    async def test_confirm_success(self, mock_encrypt, mock_verify, mock_replay, client, mock_db, mock_redis):
         """Valid TOTP code confirms 2FA binding."""
         _setup_redis_hit(mock_redis)
         account = _make_account(is_2fa_enabled=False)
@@ -184,12 +185,13 @@ class TestConfirm2FA:
 
 class TestVerify2FA:
 
+    @patch("src.routers.two_factor._check_totp_replay", return_value=False)
     @patch("src.routers.two_factor.save_session", new_callable=AsyncMock)
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
     @patch("src.routers.two_factor.hash_token", return_value="hashed_temp")
     async def test_verify_totp_success(
-        self, mock_hash, mock_verify, mock_decrypt, mock_save, client, mock_db, mock_redis
+        self, mock_hash, mock_verify, mock_decrypt, mock_save, mock_replay, client, mock_db, mock_redis
     ):
         """Valid TOTP code → 200 with id, name, token."""
         temp_token_record = MagicMock()
@@ -252,6 +254,35 @@ class TestVerify2FA:
         assert body["id"] == 1
         assert body["name"] == "Test User"
         assert backup_code.is_used is True
+
+    @patch("src.routers.two_factor._check_totp_replay", return_value=True)
+    @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
+    @patch("src.routers.two_factor.verify_totp_code", return_value=True)
+    @patch("src.routers.two_factor.hash_token", return_value="hashed_temp")
+    async def test_verify_totp_replay_rejected(
+        self, mock_hash, mock_verify, mock_decrypt, mock_replay, client, mock_db, mock_redis
+    ):
+        """Replayed TOTP code → 401."""
+        temp_token_record = MagicMock()
+        temp_token_record.user_id = 1
+        temp_token_record.token_type = "2fa_verify"
+        temp_token_record.expire_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        account = _make_account(is_2fa_enabled=True, totp_secret_encrypted="enc_secret")
+
+        mock_db.execute.side_effect = [
+            _db_result(temp_token_record),
+            _db_result(account),
+        ]
+
+        response = await client.post(
+            "/auth/2fa/verify",
+            headers={"Temp-Token": "temp-token-value"},
+            json={"code": "123456"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["message"] == "TOTP code already used, please wait for a new code"
 
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
     @patch("src.routers.two_factor.verify_totp_code", return_value=False)
@@ -325,7 +356,7 @@ class TestDisable2FA:
 
         mock_db.execute.side_effect = [
             _db_result(account),       # _require_user → Account
-            _db_scalars_all([]),        # backup codes query (empty)
+            MagicMock(),               # bulk DELETE (sa_delete)
         ]
 
         response = await client.post(
@@ -410,14 +441,15 @@ class TestRegenerateBackupCodes:
 
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
-    async def test_regenerate_success(self, mock_verify, mock_decrypt, client, mock_db, mock_redis):
+    @patch("src.routers.two_factor._check_totp_replay", return_value=False)
+    async def test_regenerate_success(self, mock_replay, mock_verify, mock_decrypt, client, mock_db, mock_redis):
         """Valid TOTP code → new backup codes returned."""
         _setup_redis_hit(mock_redis)
         account = _make_account(is_2fa_enabled=True, totp_secret_encrypted="enc")
 
         mock_db.execute.side_effect = [
             _db_result(account),       # _require_user → Account
-            _db_scalars_all([]),        # old backup codes (delete)
+            MagicMock(),               # bulk DELETE (sa_delete)
         ]
 
         response = await client.post(
@@ -484,8 +516,7 @@ class TestLogin2FAFlow:
             "/auth/login", json={"email": "test@example.com", "password": "Password1"}
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         body = response.json()
-        assert body["requires_2fa"] is True
+        assert set(body.keys()) == {"temp_token"}
         assert isinstance(body["temp_token"], str) and body["temp_token"]
-        assert body["token"] == ""

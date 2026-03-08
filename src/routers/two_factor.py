@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from redis.asyncio import Redis
-from sqlalchemy import select, func
+from sqlalchemy import delete as sa_delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.constants import TokenType
@@ -53,6 +53,7 @@ from src.utils import (
     encrypt_secret,
     decrypt_secret,
     generate_backup_codes,
+    _check_totp_replay,
 )
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import save_session
@@ -196,6 +197,13 @@ async def confirm_2fa(
             detail={"message": "Invalid TOTP code"},
         )
 
+    # Replay protection
+    if await _check_totp_replay(redis, user.user_id, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "TOTP code already used, please wait for a new code"},
+        )
+
     # Persist: encrypt secret → Account, hash backup codes → TotpBackupCode
     user.totp_secret_encrypted = encrypt_secret(secret)
     user.is_2fa_enabled = True
@@ -277,6 +285,12 @@ async def verify_2fa(
     if not _is_backup_code_format(code):
         secret = decrypt_secret(user.totp_secret_encrypted)
         verified = verify_totp_code(secret, code)
+        # Replay protection
+        if verified and await _check_totp_replay(redis, user.user_id, code):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "TOTP code already used, please wait for a new code"},
+            )
     else:
         # Try as backup code
         result = await db.execute(
@@ -363,11 +377,9 @@ async def disable_2fa(
     user.totp_secret_encrypted = None
 
     # Delete all backup codes
-    result = await db.execute(
-        select(TotpBackupCode).where(TotpBackupCode.user_id == user.user_id)
+    await db.execute(
+        sa_delete(TotpBackupCode).where(TotpBackupCode.user_id == user.user_id)
     )
-    for bc in result.scalars().all():
-        await db.delete(bc)
 
     await db.commit()
 
@@ -441,12 +453,17 @@ async def regenerate_backup_codes(
             detail={"message": "Invalid TOTP code"},
         )
 
+    # Replay protection
+    if await _check_totp_replay(redis, user.user_id, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "TOTP code already used, please wait for a new code"},
+        )
+
     # Delete old backup codes
-    result = await db.execute(
-        select(TotpBackupCode).where(TotpBackupCode.user_id == user.user_id)
+    await db.execute(
+        sa_delete(TotpBackupCode).where(TotpBackupCode.user_id == user.user_id)
     )
-    for bc in result.scalars().all():
-        await db.delete(bc)
 
     # Generate and persist new codes
     new_codes = generate_backup_codes()

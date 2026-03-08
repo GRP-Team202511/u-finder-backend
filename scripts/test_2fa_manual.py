@@ -47,11 +47,11 @@ def _ok(step: str):
 def step_login() -> str:
     """Login and return the auth token."""
     r = requests.post(f"{BASE_URL}/auth/login", json={"email": EMAIL, "password": PASSWORD})
+    if r.status_code == 202:
+        _fail("Account already has 2FA enabled – disable it first or use a fresh account")
     if r.status_code != 200:
         _fail(f"Login failed ({r.status_code}): {r.text}")
     body = r.json()
-    if body.get("requires_2fa"):
-        _fail("Account already has 2FA enabled – disable it first or use a fresh account")
     token = body["token"]
     _ok(f"Login succeeded (user_id={body['id']})")
     return token
@@ -82,15 +82,13 @@ def step_confirm(token: str, secret: str):
 
 def step_login_with_2fa(secret: str) -> str:
     """Login again (should require 2FA), then verify → return final token."""
-    # Login → expect requires_2fa
+    # Login → expect 202 (2FA required)
     r = requests.post(f"{BASE_URL}/auth/login", json={"email": EMAIL, "password": PASSWORD})
-    if r.status_code != 200:
-        _fail(f"Re-login failed ({r.status_code}): {r.text}")
+    if r.status_code != 202:
+        _fail(f"Re-login expected 202, got {r.status_code}: {r.text}")
     body = r.json()
-    if not body.get("requires_2fa"):
-        _fail(f"Expected requires_2fa=True, got {body}")
     temp_token = body["temp_token"]
-    _ok(f"Re-login returned requires_2fa=True, temp_token received")
+    _ok(f"Re-login returned 202, temp_token received")
 
     # Wait a moment so TOTP code may advance past the one used in confirm
     time.sleep(1)
@@ -113,9 +111,9 @@ def step_login_with_2fa(secret: str) -> str:
 def step_verify_backup_code(backup_codes: list[str]) -> str:
     """Login again, then verify using a backup code → return final token."""
     r = requests.post(f"{BASE_URL}/auth/login", json={"email": EMAIL, "password": PASSWORD})
+    if r.status_code != 202:
+        _fail(f"Re-login for backup code test expected 202, got {r.status_code}: {r.text}")
     body = r.json()
-    if not body.get("requires_2fa"):
-        _fail("Expected requires_2fa=True for backup code test")
     temp_token = body["temp_token"]
 
     code = backup_codes[0]
@@ -189,7 +187,7 @@ def main():
     print("\n[5/8] Check 2FA status")
     status = step_status(token)
     assert status["is_2fa_enabled"] is True
-    # After using 1 backup code, remaining should be 7 (but we haven't used one yet)
+    # No backup code used yet, so all 8 should remain
     assert status["backup_codes_remaining"] == 8
 
     print("\n[6/8] Verify with backup code")

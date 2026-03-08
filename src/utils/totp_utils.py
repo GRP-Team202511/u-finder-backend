@@ -28,6 +28,16 @@ def get_totp_uri(secret: str, email: str) -> str:
     )
 
 
+async def _check_totp_replay(redis, user_id: int, code: str) -> bool:
+    """Return True if *code* was already used (replay). Marks it as used with 90s TTL."""
+    if redis is None:
+        return False
+    key = f"totp_used:{user_id}:{code}"
+    # SET NX returns True only when the key did not exist
+    was_new = await redis.set(key, "1", nx=True, ex=90)
+    return not was_new  # if was_new is False/None → code existed → replay
+
+
 def verify_totp_code(secret: str, code: str) -> bool:
     """Verify a TOTP code, allowing ±1 time window (30s tolerance)."""
     totp = pyotp.TOTP(secret)

@@ -2,7 +2,6 @@
 Two-Factor Authentication Pydantic schemas
 """
 from pydantic import BaseModel
-from typing import Optional
 
 
 # ============ Setup 2FA ============

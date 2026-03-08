@@ -10,7 +10,6 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from src.utils.password_utils import hash_password
 from tests.routers.utils.response_asserts import (
-    assert_login_200,
     assert_verify_signup_200,
     assert_message_response,
     assert_rate_limit_response,

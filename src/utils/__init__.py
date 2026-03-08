@@ -22,6 +22,7 @@ from .totp_utils import (
     encrypt_secret,
     decrypt_secret,
     generate_backup_codes,
+    _check_totp_replay,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "encrypt_secret",
     "decrypt_secret",
     "generate_backup_codes",
+    "_check_totp_replay",
 ]
