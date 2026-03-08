@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Header, status, Depends
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from src.schemas.auth import (
@@ -41,7 +41,7 @@ from src.utils import (
 )
 from redis.asyncio import Redis
 from src.config.logger import get_logger
-from src.config.constants import UserType
+from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
 from src.utils.session_utils import save_session, get_session, delete_session
 
@@ -66,7 +66,7 @@ async def _reset_password_with_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "password_reset"
+            TempToken.token_type == TokenType.PASSWORD_RESET
         )
     )
     reset_record = result.scalar_one_or_none()
@@ -344,14 +344,12 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
             existing_user.password_hashed = hash_password(request.password)
 
             # Clean up any old email_verify temp tokens for this user
-            old_tokens_result = await db.execute(
-                select(TempToken).where(
+            await db.execute(
+                delete(TempToken).where(
                     TempToken.user_id == existing_user.user_id,
-                    TempToken.token_type == "email_verify"
+                    TempToken.token_type == TokenType.EMAIL_VERIFY
                 )
             )
-            for old_token in old_tokens_result.scalars().all():
-                await db.delete(old_token)
 
             new_account = existing_user
     else:
@@ -376,7 +374,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     temp_token_record = TempToken(
         user_id=new_account.user_id,
         token_hashed=hash_token(temp_token),
-        token_type="email_verify",
+        token_type=TokenType.EMAIL_VERIFY,
         verification_code_hashed=hash_password(verification_code),  # Hash the verification code
         expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
     )
@@ -428,7 +426,7 @@ async def resend_signup_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "email_verify",
+            TempToken.token_type == TokenType.EMAIL_VERIFY,
         )
     )
     token_record = result.scalar_one_or_none()
@@ -522,7 +520,7 @@ async def _verify_signup_email_impl(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "email_verify"
+            TempToken.token_type == TokenType.EMAIL_VERIFY
         )
     )
     verification = result.scalar_one_or_none()
@@ -691,7 +689,7 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     reset_record = TempToken(
         user_id=user.user_id,
         token_hashed=hash_token(temp_token),
-        token_type="password_reset",
+        token_type=TokenType.PASSWORD_RESET,
         verification_code_hashed=hash_password(reset_code),  # Hash the reset code
         expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
     )
@@ -743,7 +741,7 @@ async def verify_reset_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "password_reset"
+            TempToken.token_type == TokenType.PASSWORD_RESET
         )
     )
     reset_record = result.scalar_one_or_none()
@@ -806,7 +804,7 @@ async def resend_reset_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "password_reset",
+            TempToken.token_type == TokenType.PASSWORD_RESET,
         )
     )
     reset_record = result.scalar_one_or_none()
