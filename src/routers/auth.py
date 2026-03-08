@@ -156,8 +156,8 @@ async def login(
         )
         user = result.scalar_one_or_none()
         
-        # Check if user exists
-        if not user:
+        # Treat non-existent and unverified accounts the same
+        if not user or not user.email_verified:
             logger.warning(f"User not found: {email}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -329,34 +329,48 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Account).where(Account.email == email))
     existing_user = result.scalar_one_or_none()
     if existing_user:
-        logger.warning(f"Signup failed: Account already exists for email: {email}")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"message": "Account exists"}
+        if existing_user.email_verified:
+            # Already verified account — cannot re-register
+            logger.warning(f"Signup failed: Verified account already exists for email: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": "Account exists"}
+            )
+        else:
+            # Unverified account — allow re-registration by updating credentials
+            logger.info(f"Re-registration for unverified email: {email}")
+            existing_user.user_name = request.name
+            existing_user.password_hashed = hash_password(request.password)
+
+            # Clean up any old email_verify temp tokens for this user
+            old_tokens_result = await db.execute(
+                select(TempToken).where(
+                    TempToken.user_id == existing_user.user_id,
+                    TempToken.token_type == "email_verify"
+                )
+            )
+            for old_token in old_tokens_result.scalars().all():
+                await db.delete(old_token)
+
+            new_account = existing_user
+    else:
+        # Create new account (not yet verified)
+        new_account = Account(
+            user_name=request.name,
+            email=email,
+            password_hashed=hash_password(request.password),
+            user_type=1,  # Default: student user type
+            email_verified=False,
         )
+        db.add(new_account)
+
+    await db.commit()
+    await db.refresh(new_account)
     
     # Generate temp token and verification code
     temp_token = create_temp_token()
     verification_code = generate_verification_code()
-    
-    # Hash password
-    password_hashed = hash_password(request.password)
-    
-    # Create temporary account (not yet verified)
-    # Store in TempToken with additional data in a JSON field or create Account directly
-    # For simplicity, create Account with is_blocked=True until verified
-    new_account = Account(
-        user_name=request.name,
-        email=email,
-        password_hashed=password_hashed,
-        user_type=1,  # Default: student user type
-        is_blocked=True  # Block until email verified
-    )
-    
-    db.add(new_account)
-    await db.commit()
-    await db.refresh(new_account)
-    
+
     # Create temp token for email verification with hashed verification code
     temp_token_record = TempToken(
         user_id=new_account.user_id,
@@ -550,16 +564,17 @@ async def _verify_signup_email_impl(
             detail={"message": "User not found"}
         )
     
-    # Unblock account (activate)
-    user.is_blocked = False
+    # Mark email as verified
+    user.email_verified = True
     
-    # Create user profile
-    user_profile = UserProfile(
-        user_id=user.user_id,
-        basic_info={}  # Empty JSONB object
-    )
+    # Create user profile if not exists (in case of re-registration)
+    if not user.profile:
+        user_profile = UserProfile(
+            user_id=user.user_id,
+            basic_info={}  # Empty JSONB object
+        )
+        db.add(user_profile)
     
-    db.add(user_profile)
     await db.delete(verification)
     await db.commit()
     await db.refresh(user)

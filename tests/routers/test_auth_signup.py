@@ -40,13 +40,17 @@ def _make_account(
     user_id: int = 1,
     email: str = "test@example.com",
     user_name: str = "Test User",
-    is_blocked: bool = True,
+    is_blocked: bool = False,
+    email_verified: bool = False,
+    profile=None,
 ):
     acc = MagicMock()
     acc.user_id = user_id
     acc.email = email
     acc.user_name = user_name
     acc.is_blocked = is_blocked
+    acc.email_verified = email_verified
+    acc.profile = profile
     return acc
 
 
@@ -91,14 +95,30 @@ class TestSignup:
         assert_signup_200(response.json())
 
     @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=True)
-    async def test_signup_duplicate_email(self, mock_email, client, mock_db):
-        """Existing email must return 409 with 'Account exists'."""
-        mock_db.execute.return_value.scalar_one_or_none.return_value = _make_account()
+    async def test_signup_duplicate_verified_email(self, mock_email, client, mock_db):
+        """Verified email must return 409 with 'Account exists'."""
+        mock_db.execute.return_value.scalar_one_or_none.return_value = _make_account(email_verified=True)
 
         response = await client.post(SIGNUP_URL, json=VALID_SIGNUP_PAYLOAD)
 
         assert response.status_code == 409
         assert_message_response(response.json(), "Account exists")
+
+    @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=True)
+    async def test_signup_unverified_email_allows_re_registration(self, mock_email, client, mock_db):
+        """Unverified email must allow re-registration and return 200 with a new temp_token."""
+        unverified_account = _make_account(email_verified=False)
+        # First execute returns the unverified account, second returns empty scalars for old tokens
+        result1 = MagicMock()
+        result1.scalar_one_or_none.return_value = unverified_account
+        result2 = MagicMock()
+        result2.scalars.return_value.all.return_value = []  # no old temp tokens
+        mock_db.execute.side_effect = [result1, result2]
+
+        response = await client.post(SIGNUP_URL, json=VALID_SIGNUP_PAYLOAD)
+
+        assert response.status_code == 200
+        assert_signup_200(response.json())
 
     async def test_signup_weak_password_no_digit(self, client):
         """Password with no digits must be rejected with 422."""

@@ -17,6 +17,7 @@ def _make_user(
     *,
     password: str = "Password1",
     is_blocked: bool = False,
+    email_verified: bool = True,
     user_id: int = 1,
     user_name: str = "Test User",
     email: str = "test@example.com",
@@ -30,6 +31,7 @@ def _make_user(
     user.email = email
     user.password_hashed = hash_password(password)
     user.is_blocked = is_blocked
+    user.email_verified = email_verified
     return user
 
 
@@ -86,6 +88,16 @@ class TestLogin:
 
         assert response.status_code == 403
         assert_message_response(response.json(), "Account is blocked")
+
+    async def test_login_unverified_email(self, client, mock_db):
+        """An unverified account is treated as non-existent."""
+        user = _make_user(email_verified=False)
+        mock_db.execute.return_value.scalar_one_or_none.return_value = user
+
+        response = await client.post(LOGIN_URL, json=VALID_PAYLOAD)
+
+        assert response.status_code == 404
+        assert_message_response(response.json(), "User not found")
 
     async def test_login_invalid_email_format(self, client):
         """A malformed email must return 422 (Pydantic validation)."""
