@@ -3,6 +3,7 @@ Authentication router module
 Contains authentication related endpoints such as user login
 """
 from fastapi import APIRouter, HTTPException, Header, status, Depends
+from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from sqlalchemy import select
 from src.schemas.auth import (
     LoginRequest,
     LoginResponse,
+    Login2FARequiredResponse,
     LogoutResponse,
     SignUpRequest,
     SignUpResponse,
@@ -40,7 +42,7 @@ from src.utils import (
 )
 from redis.asyncio import Redis
 from src.config.logger import get_logger
-from src.config.constants import UserType
+from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
 from src.utils.session_utils import save_session, get_session, delete_session
 
@@ -128,6 +130,7 @@ async def _reset_password_with_code(
     summary="User Login",
     responses={
         200: {"description": "Login successful", "model": LoginResponse},
+        202: {"description": "2FA verification required", "model": Login2FARequiredResponse},
         401: {"description": "Incorrect password", "model": ErrorResponse},
         404: {"description": "User not found", "model": ErrorResponse}
     }
@@ -180,6 +183,27 @@ async def login(
                 detail={"message": "Incorrect password"}
             )
         
+        # ── 2FA check ──
+        if user.is_2fa_enabled:
+            two_fa_temp_token = create_temp_token()
+            two_fa_record = TempToken(
+                user_id=user.user_id,
+                token_hashed=hash_token(two_fa_temp_token),
+                token_type=TokenType.TWO_FACTOR_VERIFY,
+                expire_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+            db.add(two_fa_record)
+            await db.commit()
+
+            logger.info(f"2FA required for user: {email}")
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content=Login2FARequiredResponse(
+                    temp_token=two_fa_temp_token,
+                ).model_dump(),
+            )
+        # ── End 2FA check ──
+
         # Create refresh token and store in database
         refresh_token = create_temp_token()
         token_hashed = hash_token(refresh_token)
