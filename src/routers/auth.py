@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from src.schemas.auth import (
     LoginRequest,
@@ -553,7 +554,9 @@ async def _verify_signup_email_impl(
     
     # Get user account and activate it
     result = await db.execute(
-        select(Account).where(Account.user_id == verification.user_id)
+        select(Account)
+        .options(selectinload(Account.profile))
+        .where(Account.user_id == verification.user_id)
     )
     user = result.scalar_one_or_none()
     
