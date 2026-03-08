@@ -5,9 +5,9 @@ Tests the full 2FA lifecycle against a running server:
   1. Login (get auth token)
   2. Setup 2FA                → totp_uri, qr_code_base64, backup_codes
   3. Confirm 2FA (with real TOTP code)
-  4. Logout & re-login        → requires_2fa=True, temp_token
-  5. Verify 2FA (with real TOTP code) → final token
-  6. Check 2FA status
+  4. Re-login + TOTP verify   → 202 + temp_token → final token
+  5. Check 2FA status
+  6. Re-login + backup code verify → final token
   7. Regenerate backup codes
   8. Disable 2FA
 

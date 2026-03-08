@@ -114,7 +114,7 @@ class TestSetup2FA:
 
 class TestConfirm2FA:
 
-    @patch("src.routers.two_factor._check_totp_replay", return_value=False)
+    @patch("src.routers.two_factor.check_totp_replay", return_value=False)
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
     @patch("src.routers.two_factor.encrypt_secret", return_value="encrypted_blob")
     async def test_confirm_success(self, mock_encrypt, mock_verify, mock_replay, client, mock_db, mock_redis):
@@ -178,6 +178,24 @@ class TestConfirm2FA:
 
         assert response.status_code == 409
 
+    @patch("src.routers.two_factor.check_totp_replay", return_value=True)
+    @patch("src.routers.two_factor.verify_totp_code", return_value=True)
+    async def test_confirm_replay_rejected(self, mock_verify, mock_replay, client, mock_db, mock_redis):
+        """Replayed TOTP code during confirm → 400."""
+        _setup_redis_hit(mock_redis)
+        account = _make_account(is_2fa_enabled=False)
+        mock_db.execute.return_value = _db_result(account)
+
+        setup_data = json.dumps({"secret": "JBSWY3DPEHPK3PXP", "backup_codes": ["A1B2C3D4"] * 8})
+        mock_redis.get.return_value = setup_data
+
+        response = await client.post(
+            "/auth/2fa/confirm", headers=AUTH_HEADERS, json={"code": "123456"}
+        )
+
+        assert response.status_code == 400
+        assert response.json()["message"] == "TOTP code already used, please wait for a new code"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /auth/2fa/verify
@@ -185,7 +203,7 @@ class TestConfirm2FA:
 
 class TestVerify2FA:
 
-    @patch("src.routers.two_factor._check_totp_replay", return_value=False)
+    @patch("src.routers.two_factor.check_totp_replay", return_value=False)
     @patch("src.routers.two_factor.save_session", new_callable=AsyncMock)
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
@@ -255,7 +273,7 @@ class TestVerify2FA:
         assert body["name"] == "Test User"
         assert backup_code.is_used is True
 
-    @patch("src.routers.two_factor._check_totp_replay", return_value=True)
+    @patch("src.routers.two_factor.check_totp_replay", return_value=True)
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
     @patch("src.routers.two_factor.hash_token", return_value="hashed_temp")
@@ -441,7 +459,7 @@ class TestRegenerateBackupCodes:
 
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
     @patch("src.routers.two_factor.verify_totp_code", return_value=True)
-    @patch("src.routers.two_factor._check_totp_replay", return_value=False)
+    @patch("src.routers.two_factor.check_totp_replay", return_value=False)
     async def test_regenerate_success(self, mock_replay, mock_verify, mock_decrypt, client, mock_db, mock_redis):
         """Valid TOTP code → new backup codes returned."""
         _setup_redis_hit(mock_redis)
@@ -488,6 +506,22 @@ class TestRegenerateBackupCodes:
 
         assert response.status_code == 400
         assert response.json()["message"] == "2FA is not enabled"
+
+    @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
+    @patch("src.routers.two_factor.verify_totp_code", return_value=True)
+    @patch("src.routers.two_factor.check_totp_replay", return_value=True)
+    async def test_regenerate_replay_rejected(self, mock_replay, mock_verify, mock_decrypt, client, mock_db, mock_redis):
+        """Replayed TOTP code during regenerate → 400."""
+        _setup_redis_hit(mock_redis)
+        account = _make_account(is_2fa_enabled=True, totp_secret_encrypted="enc")
+        mock_db.execute.return_value = _db_result(account)
+
+        response = await client.post(
+            "/auth/2fa/backup-codes/regenerate", headers=AUTH_HEADERS, json={"code": "123456"}
+        )
+
+        assert response.status_code == 400
+        assert response.json()["message"] == "TOTP code already used, please wait for a new code"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

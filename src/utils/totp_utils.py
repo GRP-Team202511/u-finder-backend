@@ -28,7 +28,7 @@ def get_totp_uri(secret: str, email: str) -> str:
     )
 
 
-async def _check_totp_replay(redis, user_id: int, code: str) -> bool:
+async def check_totp_replay(redis, user_id: int, code: str) -> bool:
     """Return True if *code* was already used (replay). Marks it as used with 90s TTL."""
     if redis is None:
         return False

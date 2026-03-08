@@ -30,10 +30,7 @@ def assert_login_200(payload: Dict[str, Any]) -> None:
 
 
 def assert_verify_signup_200(payload: Dict[str, Any]) -> None:
-    _assert_fields(payload, ["id", "name", "token"])
-    assert isinstance(payload["id"], int)
-    assert isinstance(payload["name"], str)
-    assert isinstance(payload["token"], str) and payload["token"], "token must be non-empty string"
+    assert_login_200(payload)
 
 
 def assert_validation_error(payload: Dict[str, Any]) -> None:

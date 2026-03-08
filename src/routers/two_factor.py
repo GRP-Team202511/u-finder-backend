@@ -53,7 +53,7 @@ from src.utils import (
     encrypt_secret,
     decrypt_secret,
     generate_backup_codes,
-    _check_totp_replay,
+    check_totp_replay,
 )
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import save_session
@@ -198,7 +198,7 @@ async def confirm_2fa(
         )
 
     # Replay protection
-    if await _check_totp_replay(redis, user.user_id, request.code):
+    if await check_totp_replay(redis, user.user_id, request.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"message": "TOTP code already used, please wait for a new code"},
@@ -286,7 +286,7 @@ async def verify_2fa(
         secret = decrypt_secret(user.totp_secret_encrypted)
         verified = verify_totp_code(secret, code)
         # Replay protection
-        if verified and await _check_totp_replay(redis, user.user_id, code):
+        if verified and await check_totp_replay(redis, user.user_id, code):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"message": "TOTP code already used, please wait for a new code"},
@@ -454,7 +454,7 @@ async def regenerate_backup_codes(
         )
 
     # Replay protection
-    if await _check_totp_replay(redis, user.user_id, request.code):
+    if await check_totp_replay(redis, user.user_id, request.code):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"message": "TOTP code already used, please wait for a new code"},
