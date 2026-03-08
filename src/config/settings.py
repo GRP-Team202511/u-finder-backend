@@ -2,7 +2,10 @@
 Settings and configuration module
 Loads and manages environment variables using pydantic
 """
+import base64
+
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from functools import lru_cache
 from typing import List
 from dotenv import load_dotenv
@@ -65,6 +68,26 @@ class Settings(BaseSettings):
     dify_api_key: str = ""
     dify_workflow_api_key: str = ""
     dify_timeout: int = 60  # seconds
+
+    # 2FA / TOTP Settings
+    totp_encryption_key: str = ""  # Base64-encoded 32-byte AES-256 key
+
+    @model_validator(mode="after")
+    def _validate_totp_key(self) -> "Settings":
+        key = self.totp_encryption_key
+        if not key:
+            return self  # allow empty in test / non-2FA environments
+        try:
+            raw = base64.b64decode(key)
+        except Exception as exc:
+            raise ValueError(f"TOTP_ENCRYPTION_KEY is not valid Base64: {exc}") from exc
+        if len(raw) not in (16, 24, 32):
+            raise ValueError(
+                f"TOTP_ENCRYPTION_KEY must decode to 16, 24 or 32 bytes "
+                f"(got {len(raw)}). Generate with: "
+                f'python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"'
+            )
+        return self
 
     # CV Upload Settings
     cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB

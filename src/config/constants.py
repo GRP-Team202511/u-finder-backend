@@ -34,3 +34,4 @@ class TokenType:
     EMAIL_VERIFY = "email_verify"
     PASSWORD_RESET = "password_reset"
     EMAIL_CHANGE = "email_change"
+    TWO_FACTOR_VERIFY = "2fa_verify"
