@@ -18,6 +18,10 @@ class LoginResponse(BaseModel):
     token: str
 
 
+class Login2FARequiredResponse(BaseModel):
+    temp_token: str
+
+
 # ============ Logout ============
 class LogoutResponse(BaseModel):
     message: str

@@ -53,3 +53,9 @@ uvicorn==0.24.0
 watchfiles==1.1.1
 websockets==15.0.1
 yagmail==0.15.293
+
+# 2FA dependencies
+pyotp==2.9.0
+cryptography==46.0.5
+qrcode==8.2
+pillow==12.1.1
