@@ -476,7 +476,7 @@ async def delete_dify_conversation(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
-            response = await client.delete(url, json=payload, headers=headers)
+            response = await client.delete(url, params=payload, headers=headers)
     except httpx.RequestError as exc:
         logger.error("Dify delete conversation request failed: %s", exc)
         raise DifyUpstreamError(502, str(exc).encode()) from exc
