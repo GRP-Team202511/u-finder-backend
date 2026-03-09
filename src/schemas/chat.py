@@ -72,7 +72,7 @@ class ConversationItem(BaseModel):
     name: str
     inputs: dict = Field(default_factory=dict)
     status: str
-    introduction: str = ""
+    introduction: Optional[str] = ""
     created_at: int
     updated_at: int
 
