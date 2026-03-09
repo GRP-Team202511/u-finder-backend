@@ -40,13 +40,17 @@ def _make_account(
     user_id: int = 1,
     email: str = "test@example.com",
     user_name: str = "Test User",
-    is_blocked: bool = True,
+    is_blocked: bool = False,
+    email_verified: bool = False,
+    profile=None,
 ):
     acc = MagicMock()
     acc.user_id = user_id
     acc.email = email
     acc.user_name = user_name
     acc.is_blocked = is_blocked
+    acc.email_verified = email_verified
+    acc.profile = profile
     return acc
 
 
@@ -91,14 +95,29 @@ class TestSignup:
         assert_signup_200(response.json())
 
     @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=True)
-    async def test_signup_duplicate_email(self, mock_email, client, mock_db):
-        """Existing email must return 409 with 'Account exists'."""
-        mock_db.execute.return_value.scalar_one_or_none.return_value = _make_account()
+    async def test_signup_duplicate_verified_email(self, mock_email, client, mock_db):
+        """Verified email must return 409 with 'Account exists'."""
+        mock_db.execute.return_value.scalar_one_or_none.return_value = _make_account(email_verified=True)
 
         response = await client.post(SIGNUP_URL, json=VALID_SIGNUP_PAYLOAD)
 
         assert response.status_code == 409
         assert_message_response(response.json(), "Account exists")
+
+    @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=True)
+    async def test_signup_unverified_email_allows_re_registration(self, mock_email, client, mock_db):
+        """Unverified email must allow re-registration and return 200 with a new temp_token."""
+        unverified_account = _make_account(email_verified=False)
+        # First execute returns the unverified account, second is the bulk DELETE (no result needed)
+        result1 = MagicMock()
+        result1.scalar_one_or_none.return_value = unverified_account
+        result2 = MagicMock()  # bulk delete result
+        mock_db.execute.side_effect = [result1, result2]
+
+        response = await client.post(SIGNUP_URL, json=VALID_SIGNUP_PAYLOAD)
+
+        assert response.status_code == 200
+        assert_signup_200(response.json())
 
     async def test_signup_weak_password_no_digit(self, client):
         """Password with no digits must be rejected with 422."""
@@ -158,6 +177,28 @@ class TestVerifySignupEmail:
         assert_verify_signup_200(body)
         assert body["id"] == user.user_id
         assert body["name"] == user.user_name
+
+    async def test_verify_success_with_existing_profile(self, client, mock_db):
+        """Re-verified user with existing profile must not create duplicate profile."""
+        code = "123456"
+        token_record = _make_temp_token(code=code)
+        existing_profile = MagicMock()  # simulate profile already exists
+        user = _make_account(profile=existing_profile)
+        mock_db.execute.side_effect = _two_results(token_record, user)
+
+        response = await client.post(
+            VERIFY_URL,
+            json={"code": code},
+            headers={"Temp-Token": "fake-temp-token"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert_verify_signup_200(body)
+        # db.add should NOT be called for UserProfile since profile already exists
+        add_calls = [c for c in mock_db.add.call_args_list
+                     if hasattr(c[0][0], 'basic_info')]  # UserProfile has basic_info
+        assert len(add_calls) == 0
 
     async def test_verify_invalid_temp_token(self, client, mock_db):
         """Token not found in DB must return 401."""

@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
 
 from src.schemas.auth import (
     LoginRequest,
@@ -67,7 +68,7 @@ async def _reset_password_with_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "password_reset"
+            TempToken.token_type == TokenType.PASSWORD_RESET
         )
     )
     reset_record = result.scalar_one_or_none()
@@ -159,8 +160,8 @@ async def login(
         )
         user = result.scalar_one_or_none()
         
-        # Check if user exists
-        if not user:
+        # Treat non-existent and unverified accounts the same
+        if not user or not user.email_verified:
             logger.warning(f"User not found: {email}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -353,39 +354,51 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Account).where(Account.email == email))
     existing_user = result.scalar_one_or_none()
     if existing_user:
-        logger.warning(f"Signup failed: Account already exists for email: {email}")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"message": "Account exists"}
+        if existing_user.email_verified:
+            # Already verified account — cannot re-register
+            logger.warning(f"Signup failed: Verified account already exists for email: {email}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": "Account exists"}
+            )
+        else:
+            # Unverified account — allow re-registration by updating credentials
+            logger.info(f"Re-registration for unverified email: {email}")
+            existing_user.user_name = request.name
+            existing_user.password_hashed = hash_password(request.password)
+
+            # Clean up any old email_verify temp tokens for this user
+            await db.execute(
+                delete(TempToken).where(
+                    TempToken.user_id == existing_user.user_id,
+                    TempToken.token_type == TokenType.EMAIL_VERIFY
+                )
+            )
+
+            new_account = existing_user
+    else:
+        # Create new account (not yet verified)
+        new_account = Account(
+            user_name=request.name,
+            email=email,
+            password_hashed=hash_password(request.password),
+            user_type=1,  # Default: student user type
+            email_verified=False,
         )
+        db.add(new_account)
+
+    await db.commit()
+    await db.refresh(new_account)
     
     # Generate temp token and verification code
     temp_token = create_temp_token()
     verification_code = generate_verification_code()
-    
-    # Hash password
-    password_hashed = hash_password(request.password)
-    
-    # Create temporary account (not yet verified)
-    # Store in TempToken with additional data in a JSON field or create Account directly
-    # For simplicity, create Account with is_blocked=True until verified
-    new_account = Account(
-        user_name=request.name,
-        email=email,
-        password_hashed=password_hashed,
-        user_type=1,  # Default: student user type
-        is_blocked=True  # Block until email verified
-    )
-    
-    db.add(new_account)
-    await db.commit()
-    await db.refresh(new_account)
-    
+
     # Create temp token for email verification with hashed verification code
     temp_token_record = TempToken(
         user_id=new_account.user_id,
         token_hashed=hash_token(temp_token),
-        token_type="email_verify",
+        token_type=TokenType.EMAIL_VERIFY,
         verification_code_hashed=hash_password(verification_code),  # Hash the verification code
         expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
     )
@@ -437,7 +450,7 @@ async def resend_signup_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "email_verify",
+            TempToken.token_type == TokenType.EMAIL_VERIFY,
         )
     )
     token_record = result.scalar_one_or_none()
@@ -531,7 +544,7 @@ async def _verify_signup_email_impl(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "email_verify"
+            TempToken.token_type == TokenType.EMAIL_VERIFY
         )
     )
     verification = result.scalar_one_or_none()
@@ -563,7 +576,9 @@ async def _verify_signup_email_impl(
     
     # Get user account and activate it
     result = await db.execute(
-        select(Account).where(Account.user_id == verification.user_id)
+        select(Account)
+        .options(selectinload(Account.profile))
+        .where(Account.user_id == verification.user_id)
     )
     user = result.scalar_one_or_none()
     
@@ -574,16 +589,17 @@ async def _verify_signup_email_impl(
             detail={"message": "User not found"}
         )
     
-    # Unblock account (activate)
-    user.is_blocked = False
+    # Mark email as verified
+    user.email_verified = True
     
-    # Create user profile
-    user_profile = UserProfile(
-        user_id=user.user_id,
-        basic_info={}  # Empty JSONB object
-    )
+    # Create user profile if not exists (in case of re-registration)
+    if not user.profile:
+        user_profile = UserProfile(
+            user_id=user.user_id,
+            basic_info={}  # Empty JSONB object
+        )
+        db.add(user_profile)
     
-    db.add(user_profile)
     await db.delete(verification)
     await db.commit()
     await db.refresh(user)
@@ -697,7 +713,7 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     reset_record = TempToken(
         user_id=user.user_id,
         token_hashed=hash_token(temp_token),
-        token_type="password_reset",
+        token_type=TokenType.PASSWORD_RESET,
         verification_code_hashed=hash_password(reset_code),  # Hash the reset code
         expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)  # 5 minute expiry
     )
@@ -749,7 +765,7 @@ async def verify_reset_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "password_reset"
+            TempToken.token_type == TokenType.PASSWORD_RESET
         )
     )
     reset_record = result.scalar_one_or_none()
@@ -812,7 +828,7 @@ async def resend_reset_code(
     result = await db.execute(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
-            TempToken.token_type == "password_reset",
+            TempToken.token_type == TokenType.PASSWORD_RESET,
         )
     )
     reset_record = result.scalar_one_or_none()

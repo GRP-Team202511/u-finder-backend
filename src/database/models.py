@@ -21,6 +21,7 @@ class Account(Base):
     totp_secret_encrypted = Column(String, nullable=True, comment="use AES-GCM to encrypt, not null if 2FA is enabled")
     passkey_enabled = Column(Boolean, nullable=False, default=False)
     is_blocked = Column(Boolean, nullable=False, default=False)
+    email_verified = Column(Boolean, nullable=False, default=False, comment="Whether the user's email has been verified")
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"), comment="Auto-updated via trigger on UPDATE")
 
