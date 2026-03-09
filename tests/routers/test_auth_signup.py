@@ -194,7 +194,7 @@ class TestVerifySignupEmail:
 
         assert response.status_code == 201
         body = response.json()
-        assert_login_200(body)
+        assert_verify_signup_200(body)
         # db.add should NOT be called for UserProfile since profile already exists
         add_calls = [c for c in mock_db.add.call_args_list
                      if hasattr(c[0][0], 'basic_info')]  # UserProfile has basic_info
