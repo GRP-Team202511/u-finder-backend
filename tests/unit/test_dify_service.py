@@ -422,7 +422,7 @@ class TestDeleteConversationSuccess:
         client_instance.delete.assert_called_once()
         call_args = client_instance.delete.call_args
         assert "conversations/conv_xyz" in call_args[0][0]
-        assert call_args[1]["json"] == {"user": "42"}
+        assert call_args[1]["params"] == {"user": "42"}
 
 
 class TestDeleteConversationErrors:
