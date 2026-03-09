@@ -228,9 +228,10 @@ async def get_dify_messages(
     params = {
         "conversation_id": conversation_id,
         "user": user,
-        "first_id": first_id,
         "limit": limit,
     }
+    if first_id:
+        params["first_id"] = first_id
 
     headers = {
         "Authorization": f"Bearer {settings.dify_api_key}",
