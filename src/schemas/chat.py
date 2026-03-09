@@ -70,7 +70,7 @@ class ConversationItem(BaseModel):
     """A single conversation in the list."""
     id: str
     name: str
-    inputs: dict = {}
+    inputs: dict = Field(default_factory=dict)
     status: str
     introduction: str = ""
     created_at: int

@@ -189,7 +189,6 @@ async def stop_dify_chat(*, task_id: str, user: str) -> dict:
 
 
 # ──────────────────────────────────────────────
-# ──────────────────────────────────────────────
 # Dify GET /messages — conversation history
 # ──────────────────────────────────────────────
 DIFY_MESSAGES_URL = f"{settings.dify_api_base_url}/messages"
