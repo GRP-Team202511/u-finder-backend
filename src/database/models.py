@@ -133,6 +133,7 @@ class TempToken(Base):
     __table_args__ = (
         Index('ix_temp_token_user_id_expire_at', 'user_id', 'expire_at'),
         Index('ix_temp_token_token_hashed', 'token_hashed'),
+        Index('ix_temp_token_verification_code_hashed', 'verification_code_hashed'),
         Index('ix_temp_token_token_type', 'token_type'),
     )
 
