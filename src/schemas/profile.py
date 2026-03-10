@@ -14,7 +14,7 @@ class PersonalInfoResponse(BaseModel):
 
 class UpdatePersonalInfoRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    gender: str = Field(..., min_length=1, max_length=20)
+    gender: str = Field(..., max_length=20)
     birthday: str = Field(...)
 
 
@@ -61,7 +61,7 @@ class PersonalInfoData(BaseModel):
 
 class PersonalInfoUpdateData(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    gender: str = Field(..., min_length=1, max_length=20)
+    gender: str = Field(..., max_length=20)
     birthday: str = Field(...)
 
 
