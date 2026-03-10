@@ -28,7 +28,7 @@ from src.schemas.auth import (
     RateLimitResponse,
     ConfirmResetPasswordRequest,
     ConfirmResetPasswordResponse,
-    GetEmailResponse,
+    GetUserInfoResponse,
     ErrorResponse,
 )
 from src.utils import (
@@ -954,25 +954,25 @@ async def reset_verify(
     return await _reset_password_with_code(request, temp_token, db)
 
 
-# ============ Get User Email ============
+# ============ Get User Info ============
 @router.get(
-    "/settings/email",
-    response_model=GetEmailResponse,
+    "/settings/info",
+    response_model=GetUserInfoResponse,
     status_code=status.HTTP_200_OK,
-    summary="Get User Email",
+    summary="Get User Info",
     responses={
-        200: {"description": "Successfully retrieved user email", "model": GetEmailResponse},
+        200: {"description": "Successfully retrieved user info", "model": GetUserInfoResponse},
         401: {"description": "Invalid or expired token", "model": ErrorResponse},
         404: {"description": "User not found", "model": ErrorResponse},
     },
 )
-async def get_email(
+async def get_user_info(
     authorization: str = Header(..., alias="Authorization"),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
 ):
     """
-    Returns the email address of the currently authenticated user.
+    Returns the email, name and user type of the currently authenticated user.
 
     - **Authorization**: Bearer token (refresh token) in header
     """
@@ -984,11 +984,15 @@ async def get_email(
     user = result.scalar_one_or_none()
 
     if not user:
-        logger.error(f"Get email failed: User not found for user_id: {user_id}")
+        logger.error(f"Get user info failed: User not found for user_id: {user_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"message": "User not found"},
         )
 
-    return GetEmailResponse(email=user.email)
+    return GetUserInfoResponse(
+        email=user.email,
+        name=user.user_name,
+        user_type=user.user_type,
+    )
 
