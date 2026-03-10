@@ -114,8 +114,8 @@ class TestGetAllProfile:
         assert response.status_code == 200
         body = response.json()
         assert_all_profile_200(body)
-        # Name falls back to account.user_name
-        assert body["personalInfo"]["name"] == fake_account.user_name
+        # No profile row -> name defaults to empty string
+        assert body["personalInfo"]["name"] == ""
         # All array sections are empty lists
         for section in ["education", "academic", "test", "internship", "project", "campus", "award"]:
             assert body[section]["data"] == []

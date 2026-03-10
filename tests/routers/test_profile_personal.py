@@ -78,8 +78,8 @@ class TestGetPersonalInfo:
         assert response.status_code == 200
         body = response.json()
         assert_personal_info_200(body)
-        # Falls back to account.user_name when no basic_info
-        assert body["name"] == fake_account.user_name
+        # No profile row -> name defaults to empty string
+        assert body["name"] == ""
 
     async def test_get_personal_missing_auth_header(self, client):
         """Missing Authorization header -> 422 (FastAPI required header validation)."""
