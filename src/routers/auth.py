@@ -1007,7 +1007,6 @@ async def get_user_info(
     responses={
         200: {"description": "All sessions revoked successfully", "model": LogoutAllResponse},
         401: {"description": "Invalid or expired token", "model": ErrorResponse},
-        404: {"description": "User not found", "model": ErrorResponse},
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
 )
@@ -1024,29 +1023,24 @@ async def logout_all_devices(
     try:
         user_id = await get_current_user_id(authorization, db, redis)
 
-        # Verify user exists
-        result = await db.execute(
-            select(Account).where(Account.user_id == user_id)
-        )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            logger.error(f"Logout all failed: User not found for user_id: {user_id}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "User not found"},
-            )
-
-        # Delete all refresh tokens from DB
+        # Always revoke all sessions first, even if Account row is missing
         delete_result = await db.execute(
             delete(RefreshToken).where(RefreshToken.user_id == user_id)
         )
         db_revoked = delete_result.rowcount
         await db.commit()
 
-        # Delete all cached sessions from Redis
         if redis:
             await delete_all_user_sessions(redis, user_id)
+
+        # Verify user exists (log anomaly but still return success since sessions are revoked)
+        result = await db.execute(
+            select(Account).where(Account.user_id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.error(f"Logout all: Account not found for user_id: {user_id}, revoked {db_revoked} orphaned sessions")
 
         logger.info(f"Logout all devices successful for user_id: {user_id}, revoked {db_revoked} sessions")
 

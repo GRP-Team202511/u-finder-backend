@@ -41,8 +41,8 @@ class TestLogoutAllDevices:
         """Valid token + existing user -> 200 with revoked_count."""
         user = _make_user()
         mock_db.execute.side_effect = [
-            _make_select_result(user),      # Account lookup
             _make_delete_result(3),         # DELETE refresh_token
+            _make_select_result(user),      # Account lookup
         ]
 
         response = await client.post(URL, headers={"Authorization": BEARER})
@@ -58,8 +58,8 @@ class TestLogoutAllDevices:
         """User with only the current session -> 200 with revoked_count reflecting DB rows."""
         user = _make_user()
         mock_db.execute.side_effect = [
-            _make_select_result(user),
-            _make_delete_result(1),
+            _make_delete_result(1),         # DELETE refresh_token
+            _make_select_result(user),      # Account lookup
         ]
 
         response = await client.post(URL, headers={"Authorization": BEARER})
@@ -69,15 +69,21 @@ class TestLogoutAllDevices:
         assert body["message"] == "All devices have been logged out"
         assert body["revoked_count"] == 1
 
+    @patch("src.routers.auth.delete_all_user_sessions", new_callable=AsyncMock, return_value=2)
     @patch("src.routers.auth.get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_logout_all_user_not_found(self, mock_auth, client, mock_db):
-        """Valid token but Account row missing -> 404."""
-        mock_db.execute.return_value.scalar_one_or_none.return_value = None
+    async def test_logout_all_account_missing(self, mock_auth, mock_del_sessions, client, mock_db):
+        """Valid token but Account row missing -> still 200, orphaned sessions revoked."""
+        mock_db.execute.side_effect = [
+            _make_delete_result(2),         # DELETE refresh_token (orphaned)
+            _make_select_result(None),      # Account lookup -> None
+        ]
 
         response = await client.post(URL, headers={"Authorization": BEARER})
 
-        assert response.status_code == 404
-        assert_message_response(response.json(), "User not found")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["message"] == "All devices have been logged out"
+        assert body["revoked_count"] == 2
 
     @patch(
         "src.routers.auth.get_current_user_id",
