@@ -125,6 +125,11 @@ class ConfirmResetPasswordResponse(BaseModel):
     message: str
 
 
+# ============ Get Email ============
+class GetEmailResponse(BaseModel):
+    email: str
+
+
 # ============ Error Response ============
 class ErrorResponse(BaseModel):
     message: str

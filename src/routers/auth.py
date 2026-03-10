@@ -28,6 +28,7 @@ from src.schemas.auth import (
     RateLimitResponse,
     ConfirmResetPasswordRequest,
     ConfirmResetPasswordResponse,
+    GetEmailResponse,
     ErrorResponse,
 )
 from src.utils import (
@@ -46,6 +47,7 @@ from src.config.logger import get_logger
 from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
 from src.utils.session_utils import save_session, get_session, delete_session
+from src.utils.auth_deps import get_current_user_id
 
 logger = get_logger(__name__)
 
@@ -950,4 +952,42 @@ async def reset_verify(
     **Returns:** Success message on password reset
     """
     return await _reset_password_with_code(request, temp_token, db)
+
+
+# ============ Get User Email ============
+@router.get(
+    "/settings/email",
+    response_model=GetEmailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get User Email",
+    responses={
+        200: {"description": "Successfully retrieved user email", "model": GetEmailResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "User not found", "model": ErrorResponse},
+    },
+)
+async def get_email(
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Returns the email address of the currently authenticated user.
+
+    - **Authorization**: Bearer token (refresh token) in header
+    """
+    user_id = await get_current_user_id(authorization, db, redis)
+
+    result = await db.execute(
+        select(Account).where(Account.user_id == user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"},
+        )
+
+    return GetEmailResponse(email=user.email)
 
