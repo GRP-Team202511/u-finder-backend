@@ -984,6 +984,7 @@ async def get_email(
     user = result.scalar_one_or_none()
 
     if not user:
+        logger.error(f"Get email failed: User not found for user_id: {user_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"message": "User not found"},

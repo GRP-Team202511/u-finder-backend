@@ -3,6 +3,7 @@ Router tests for GET /auth/settings/email
 """
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
+from fastapi import HTTPException, status
 from tests.routers.utils.response_asserts import assert_message_response
 
 
@@ -47,3 +48,18 @@ class TestGetEmail:
         response = await client.get(URL)
 
         assert response.status_code == 422
+
+    @patch(
+        "src.routers.auth.get_current_user_id",
+        new_callable=AsyncMock,
+        side_effect=HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Invalid or expired token"},
+        ),
+    )
+    async def test_get_email_invalid_token(self, mock_auth, client):
+        """An invalid or expired token must return 401."""
+        response = await client.get(URL, headers={"Authorization": BEARER})
+
+        assert response.status_code == 401
+        assert_message_response(response.json(), "Invalid or expired token")
