@@ -27,6 +27,11 @@ class LogoutResponse(BaseModel):
     message: str
 
 
+class LogoutAllResponse(BaseModel):
+    message: str
+    revoked_count: int
+
+
 # ============ Sign Up ============
 class SignUpRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="User's display name")

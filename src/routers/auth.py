@@ -15,6 +15,7 @@ from src.schemas.auth import (
     LoginResponse,
     Login2FARequiredResponse,
     LogoutResponse,
+    LogoutAllResponse,
     SignUpRequest,
     SignUpResponse,
     VerifySignupEmailRequest,
@@ -46,7 +47,7 @@ from redis.asyncio import Redis
 from src.config.logger import get_logger
 from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
-from src.utils.session_utils import save_session, get_session, delete_session
+from src.utils.session_utils import save_session, get_session, delete_session, delete_all_user_sessions
 from src.utils.auth_deps import get_current_user_id
 
 logger = get_logger(__name__)
@@ -995,4 +996,72 @@ async def get_user_info(
         name=user.user_name,
         user_type=user.user_type,
     )
+
+
+# ============ Logout All Devices ============
+@router.post(
+    "/settings/logout-all",
+    response_model=LogoutAllResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Logout All Devices",
+    responses={
+        200: {"description": "All sessions revoked successfully", "model": LogoutAllResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "User not found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+)
+async def logout_all_devices(
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Invalidates all active sessions for the current user across all devices.
+
+    - **Authorization**: Bearer token (refresh token) in header
+    """
+    try:
+        user_id = await get_current_user_id(authorization, db, redis)
+
+        # Verify user exists
+        result = await db.execute(
+            select(Account).where(Account.user_id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.error(f"Logout all failed: User not found for user_id: {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "User not found"},
+            )
+
+        # Delete all refresh tokens from DB
+        delete_result = await db.execute(
+            delete(RefreshToken).where(RefreshToken.user_id == user_id)
+        )
+        db_revoked = delete_result.rowcount
+        await db.commit()
+
+        # Delete all cached sessions from Redis
+        if redis:
+            await delete_all_user_sessions(redis, user_id)
+
+        logger.info(f"Logout all devices successful for user_id: {user_id}, revoked {db_revoked} sessions")
+
+        return LogoutAllResponse(
+            message="All devices have been logged out",
+            revoked_count=db_revoked,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Logout all devices error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
