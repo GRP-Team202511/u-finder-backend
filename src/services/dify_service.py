@@ -228,10 +228,9 @@ async def get_dify_messages(
     params = {
         "conversation_id": conversation_id,
         "user": user,
+        "first_id": first_id,
         "limit": limit,
     }
-    if first_id:
-        params["first_id"] = first_id
 
     headers = {
         "Authorization": f"Bearer {settings.dify_api_key}",
@@ -313,11 +312,10 @@ async def get_dify_conversations(
     url = f"{base_url}/conversations"
     params = {
         "user": user,
+        "last_id": last_id,
         "limit": limit,
         "sort_by": sort_by,
     }
-    if last_id:
-        params["last_id"] = last_id
     headers = {
         "Authorization": f"Bearer {settings.dify_api_key}",
     }
@@ -478,12 +476,12 @@ async def delete_dify_conversation(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
-            response = await client.delete(url, data=json.dumps(payload), headers=headers)
+            response = await client.request("DELETE", url, json=payload, headers=headers)
     except httpx.RequestError as exc:
         logger.error("Dify delete conversation request failed: %s", exc)
         raise DifyUpstreamError(502, str(exc).encode()) from exc
 
-    if response.status_code != 200:
+    if response.status_code != 204:
         logger.error(
             "Dify delete conversation returned status=%d body=%s",
             response.status_code,
@@ -491,21 +489,11 @@ async def delete_dify_conversation(
         )
         raise DifyUpstreamError(response.status_code, response.content)
 
-    try:
-        result = response.json()
-    except ValueError as exc:
-        logger.error(
-            "Dify delete conversation returned invalid JSON: %s",
-            response.text[:500],
-        )
-        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
-
     logger.info(
-        "Dify delete conversation success: conversation_id=%s result=%s",
+        "Dify delete conversation success: conversation_id=%s",
         conversation_id,
-        result,
     )
-    return result
+    return {"result": "success"}
 
 
 # ──────────────────────────────────────────────

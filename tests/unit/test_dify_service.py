@@ -350,7 +350,7 @@ def _build_delete_client(*, status_code: int = 200, json_body: dict | None = Non
         mock_response.json.return_value = json_body if json_body is not None else {}
 
     client = AsyncMock()
-    client.delete = AsyncMock(return_value=mock_response)
+    client.request = AsyncMock(return_value=mock_response)
 
     client_ctx = MagicMock()
     client_ctx.__aenter__ = AsyncMock(return_value=client)
@@ -392,8 +392,8 @@ class TestDeleteConversationSuccess:
     """Verify successful delete returns the JSON body."""
 
     async def test_returns_result(self):
-        """Dify returns 200 → dict with result='success'."""
-        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
+        """Dify returns 204 → dict with result='success'."""
+        client_ctx = _build_delete_client(status_code=204)
 
         with patch("src.services.dify_service.settings") as mock_settings, \
              patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
@@ -407,7 +407,7 @@ class TestDeleteConversationSuccess:
 
     async def test_calls_correct_url_and_payload(self):
         """Verify the service calls Dify with the correct URL and user payload."""
-        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
+        client_ctx = _build_delete_client(status_code=204)
 
         with patch("src.services.dify_service.settings") as mock_settings, \
              patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx) as mock_client_cls:
@@ -419,10 +419,11 @@ class TestDeleteConversationSuccess:
 
         # Get the actual client instance from the context manager
         client_instance = client_ctx.__aenter__.return_value
-        client_instance.delete.assert_called_once()
-        call_args = client_instance.delete.call_args
-        assert "conversations/conv_xyz" in call_args[0][0]
-        assert call_args[1]["data"] == '{"user": "42"}'
+        client_instance.request.assert_called_once()
+        call_args = client_instance.request.call_args
+        assert call_args[0][0] == "DELETE"
+        assert "conversations/conv_xyz" in call_args[0][1]
+        assert call_args[1]["json"] == {"user": "42"}
 
 
 class TestDeleteConversationErrors:
@@ -463,7 +464,7 @@ class TestDeleteConversationErrors:
         import httpx
 
         client = AsyncMock()
-        client.delete = AsyncMock(
+        client.request = AsyncMock(
             side_effect=httpx.RequestError("Connection refused")
         )
         client_ctx = MagicMock()
@@ -481,9 +482,9 @@ class TestDeleteConversationErrors:
 
             assert exc_info.value.status_code == 502
 
-    async def test_invalid_json_response_raises_502(self):
-        """Dify returns 200 but invalid JSON → DifyUpstreamError(502)."""
-        client_ctx = _build_delete_client(status_code=200, invalid_json=True)
+    async def test_non_204_raises(self):
+        """Dify returns 200 instead of 204 → DifyUpstreamError."""
+        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
 
         with patch("src.services.dify_service.settings") as mock_settings, \
              patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
@@ -494,7 +495,7 @@ class TestDeleteConversationErrors:
             with pytest.raises(DifyUpstreamError) as exc_info:
                 await delete_dify_conversation(conversation_id="conv1", user="1")
 
-            assert exc_info.value.status_code == 502
+            assert exc_info.value.status_code == 200
 
 
 # ══════════════════════════════════════════════
