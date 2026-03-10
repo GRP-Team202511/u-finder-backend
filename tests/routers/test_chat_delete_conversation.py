@@ -6,7 +6,6 @@ from unittest.mock import patch, AsyncMock
 from src.services.dify_service import DifyUpstreamError
 from tests.routers.utils.response_asserts import (
     assert_message_response,
-    assert_delete_conversation_200,
 )
 
 
@@ -54,7 +53,7 @@ class TestDeleteConversationSuccess:
     """Verify successful conversation deletion."""
 
     async def test_delete_returns_success(self, client, mock_redis):
-        """Valid delete request → 200 with result='success'."""
+        """Valid delete request → 204 No Content."""
         mock_redis.hgetall.return_value = {"user_id": "1", "user_agent": "pytest"}
 
         with patch(
@@ -67,8 +66,8 @@ class TestDeleteConversationSuccess:
                 headers=_auth_headers(),
             )
 
-        assert resp.status_code == 200
-        assert_delete_conversation_200(resp.json())
+        assert resp.status_code == 204
+        assert resp.content == b""
 
     async def test_passes_correct_params_to_service(self, client, mock_redis):
         """Verify conversation_id and user are forwarded correctly."""
@@ -89,7 +88,7 @@ class TestDeleteConversationSuccess:
                 headers=_auth_headers(),
             )
 
-        assert resp.status_code == 200
+        assert resp.status_code == 204
         assert captured_kwargs["conversation_id"] == "c91daa90-262c-4e0a-b066-a2a2e295f81b"
         assert captured_kwargs["user"] == "42"
 
