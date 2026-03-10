@@ -2,7 +2,7 @@
 Shared authentication dependency.
 
 Extracts and verifies the refresh token from the Authorization header,
-returning the associated user_id.  Used by profile and chat routers.
+returning the associated user_id.  Used by auth, two_factor, profile and chat routers.
 """
 from typing import Optional
 
