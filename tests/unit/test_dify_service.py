@@ -391,9 +391,23 @@ class TestDeleteConversationConfigValidation:
 class TestDeleteConversationSuccess:
     """Verify successful delete returns the JSON body."""
 
-    async def test_returns_result(self):
+    async def test_returns_result_204(self):
         """Dify returns 204 → dict with result='success'."""
         client_ctx = _build_delete_client(status_code=204)
+
+        with patch("src.services.dify_service.settings") as mock_settings, \
+             patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
+            mock_settings.dify_api_key = "app-test"
+            mock_settings.dify_api_base_url = "https://api.dify.ai/v1"
+            mock_settings.dify_timeout = 60
+
+            result = await delete_dify_conversation(conversation_id="conv_abc", user="1")
+
+        assert result == {"result": "success"}
+
+    async def test_returns_result_200(self):
+        """Dify returns 200 → dict with result='success'."""
+        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
 
         with patch("src.services.dify_service.settings") as mock_settings, \
              patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
@@ -482,9 +496,9 @@ class TestDeleteConversationErrors:
 
             assert exc_info.value.status_code == 502
 
-    async def test_non_204_raises(self):
-        """Dify returns 200 instead of 204 → DifyUpstreamError."""
-        client_ctx = _build_delete_client(status_code=200, json_body={"result": "success"})
+    async def test_non_success_status_raises(self):
+        """Dify returns 400 → DifyUpstreamError."""
+        client_ctx = _build_delete_client(status_code=400, content=b"Bad Request")
 
         with patch("src.services.dify_service.settings") as mock_settings, \
              patch("src.services.dify_service.httpx.AsyncClient", return_value=client_ctx):
@@ -495,7 +509,7 @@ class TestDeleteConversationErrors:
             with pytest.raises(DifyUpstreamError) as exc_info:
                 await delete_dify_conversation(conversation_id="conv1", user="1")
 
-            assert exc_info.value.status_code == 200
+            assert exc_info.value.status_code == 400
 
 
 # ══════════════════════════════════════════════

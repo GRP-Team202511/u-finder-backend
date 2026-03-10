@@ -481,7 +481,7 @@ async def delete_dify_conversation(
         logger.error("Dify delete conversation request failed: %s", exc)
         raise DifyUpstreamError(502, str(exc).encode()) from exc
 
-    if response.status_code != 204:
+    if response.status_code not in (200, 204):
         logger.error(
             "Dify delete conversation returned status=%d body=%s",
             response.status_code,
