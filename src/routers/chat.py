@@ -6,7 +6,7 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, Query, status, Depends
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
@@ -19,6 +19,7 @@ from src.schemas.chat import (
     FeedbackRequest,
     FeedbackResponse,
     StopChatResponse,
+    DeleteConversationResponse,
     RenameConversationRequest,
     RenameConversationResponse,
     ErrorResponse,
@@ -533,10 +534,16 @@ async def message_feedback(
 @router.delete(
     "/conversations/{conversation_id}",
     summary="Delete Conversation",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=DeleteConversationResponse,
     responses={
-        204: {
+        200: {
             "description": "Conversation deleted successfully",
+            "model": DeleteConversationResponse,
+            "content": {
+                "application/json": {
+                    "example": {"result": "success"}
+                }
+            },
         },
         401: {
             "description": "Unauthorized",
@@ -639,7 +646,7 @@ async def delete_conversation(
             detail={"message": "Internal server error"},
         )
 
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return DeleteConversationResponse(result=result.get("result", "success"))
 
 
 # ──────────────────────────────────────────────
