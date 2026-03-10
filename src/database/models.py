@@ -196,3 +196,32 @@ class UserLikedUniversity(Base):
     def __repr__(self):
         return f"<UserLikedUniversity(user_id={self.user_id}, university_program_id={self.university_program_id})>"
 
+
+class LlmUsageLog(Base):
+    """Per-request LLM usage record for both chat and CV-parsing workflows."""
+    __tablename__ = "llm_usage_log"
+    __table_args__ = (
+        Index('ix_llm_usage_log_source', 'source'),
+        Index('ix_llm_usage_log_created_at', 'created_at'),
+        Index('ix_llm_usage_log_user_id', 'user_id'),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("account.user_id", ondelete="SET NULL"), nullable=True)
+    source = Column(String(50), nullable=False, comment="'chat' or 'cv_parsing'")
+    endpoint = Column(String(255), nullable=True, comment="Originating API route")
+    prompt_tokens = Column(BigInteger, nullable=True)
+    completion_tokens = Column(BigInteger, nullable=True)
+    total_tokens = Column(BigInteger, nullable=False, default=0)
+    latency_seconds = Column(String(50), nullable=True, comment="Request latency in seconds")
+    total_steps = Column(BigInteger, nullable=True, comment="Workflow total steps (cv_parsing only)")
+    total_price = Column(String(50), nullable=True, comment="Cost reported by Dify")
+    currency = Column(String(10), nullable=False, default="USD")
+    dify_message_id = Column(String(255), nullable=True, comment="Dify message ID (chat only)")
+    dify_conversation_id = Column(String(255), nullable=True, comment="Dify conversation ID (chat only)")
+    dify_workflow_run_id = Column(String(255), nullable=True, comment="Dify workflow run ID (cv_parsing only)")
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+    def __repr__(self):
+        return f"<LlmUsageLog(id={self.id}, user_id={self.user_id}, source={self.source})>"
+
