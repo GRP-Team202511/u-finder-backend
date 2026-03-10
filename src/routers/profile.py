@@ -278,9 +278,9 @@ async def get_all_profile(
 
         return AllProfileResponse(
             personalInfo=PersonalInfoData(
-                name=basic_info.get("name") or account.user_name,
-                gender=basic_info.get("gender") or "",
-                birthday=basic_info.get("birthday") or "",
+                name=basic_info.get("name", ""),
+                gender=basic_info.get("gender", ""),
+                birthday=basic_info.get("birthday", ""),
             ),
             education=ProfileSectionData(data=_safe_array_data(profile.education if profile else None)),
             academic=ProfileSectionData(data=_safe_array_data(profile.academic if profile else None)),
@@ -350,8 +350,6 @@ async def update_all_profile(
         profile.campus = request.campus.data
         profile.award = request.award.data
 
-        account.user_name = request.personalInfo.name
-
         await db.commit()
         logger.info(f"All profile updated for user {user_id}")
         return UpdateAllProfileResponse(message="All profiles updated successfully")
@@ -411,7 +409,7 @@ async def get_personal_info(
         basic_info = (profile.basic_info or {}) if profile else {}
 
         return PersonalInfoResponse(
-            name=basic_info.get("name", account.user_name),
+            name=basic_info.get("name", ""),
             gender=basic_info.get("gender", ""),
             birthday=basic_info.get("birthday"),
         )
@@ -484,9 +482,6 @@ async def update_personal_info(
         else:
             profile = UserProfile(user_id=user_id, basic_info=new_basic_info)
             db.add(profile)
-
-        # Also sync display name on account table
-        account.user_name = request.name
 
         await db.commit()
         logger.info(f"Personal info updated for user {user_id}")
