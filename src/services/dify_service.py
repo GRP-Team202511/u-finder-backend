@@ -478,12 +478,12 @@ async def delete_dify_conversation(
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.dify_timeout)) as client:
-            response = await client.request("DELETE", url, json=payload, headers=headers)
+            response = await client.delete(url, data=json.dumps(payload), headers=headers)
     except httpx.RequestError as exc:
         logger.error("Dify delete conversation request failed: %s", exc)
         raise DifyUpstreamError(502, str(exc).encode()) from exc
 
-    if response.status_code not in (200, 204):
+    if response.status_code != 200:
         logger.error(
             "Dify delete conversation returned status=%d body=%s",
             response.status_code,
@@ -491,11 +491,21 @@ async def delete_dify_conversation(
         )
         raise DifyUpstreamError(response.status_code, response.content)
 
+    try:
+        result = response.json()
+    except ValueError as exc:
+        logger.error(
+            "Dify delete conversation returned invalid JSON: %s",
+            response.text[:500],
+        )
+        raise DifyUpstreamError(502, b"Invalid JSON response from Dify") from exc
+
     logger.info(
-        "Dify delete conversation success: conversation_id=%s",
+        "Dify delete conversation success: conversation_id=%s result=%s",
         conversation_id,
+        result,
     )
-    return {"result": "success"}
+    return result
 
 
 # ──────────────────────────────────────────────
