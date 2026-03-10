@@ -228,9 +228,10 @@ async def get_dify_messages(
     params = {
         "conversation_id": conversation_id,
         "user": user,
-        "first_id": first_id,
         "limit": limit,
     }
+    if first_id:
+        params["first_id"] = first_id
 
     headers = {
         "Authorization": f"Bearer {settings.dify_api_key}",
@@ -312,10 +313,11 @@ async def get_dify_conversations(
     url = f"{base_url}/conversations"
     params = {
         "user": user,
-        "last_id": last_id,
         "limit": limit,
         "sort_by": sort_by,
     }
+    if last_id:
+        params["last_id"] = last_id
     headers = {
         "Authorization": f"Bearer {settings.dify_api_key}",
     }
