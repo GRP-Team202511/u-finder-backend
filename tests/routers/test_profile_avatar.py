@@ -1,7 +1,11 @@
 """
-Router tests for PUT /profile/avatar and DELETE /profile/avatar
+Router tests for GET /profile/avatar, PUT /profile/avatar, and DELETE /profile/avatar
 
 Covers:
+  GET  200 — Avatar URL returned (with and without avatar)
+  GET  401 — Invalid or expired token
+  GET  500 — Internal server error
+
   PUT  200 — Avatar uploaded successfully
   PUT  401 — Invalid or expired token
   PUT  413 — File too large
@@ -42,6 +46,84 @@ def _fake_profile(avatar=None):
     profile.basic_info = {"name": "Test", "avatar": avatar} if avatar else {"name": "Test"}
     profile.user_id = 1
     return profile
+
+
+# ──────────────────────────────────────────────
+# GET /profile/avatar
+# ──────────────────────────────────────────────
+
+class TestGetAvatar:
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_with_avatar(self, mock_auth, client, mock_db, mock_redis):
+        """User with avatar -> 200 with avatar_url."""
+        _setup_redis_hit(mock_redis)
+
+        profile = _fake_profile(avatar="/uploads/avatars/1.jpg")
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["avatar_url"] == "/uploads/avatars/1.jpg"
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_no_avatar(self, mock_auth, client, mock_db, mock_redis):
+        """User without avatar -> 200 with avatar_url=null."""
+        _setup_redis_hit(mock_redis)
+
+        profile = _fake_profile()  # no avatar
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["avatar_url"] is None
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_no_profile(self, mock_auth, client, mock_db, mock_redis):
+        """User with no profile record -> 200 with avatar_url=null."""
+        _setup_redis_hit(mock_redis)
+
+        # Default mock_db returns None for scalar_one_or_none
+        response = await client.get(
+            AVATAR_URL,
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["avatar_url"] is None
+
+    async def test_get_avatar_missing_auth(self, client):
+        """Missing Authorization header -> 422."""
+        response = await client.get(AVATAR_URL)
+        assert response.status_code == 422
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_internal_error(self, mock_auth, client, mock_db, mock_redis):
+        """DB error -> 500."""
+        _setup_redis_hit(mock_redis)
+        mock_db.execute.side_effect = RuntimeError("DB down")
+
+        response = await client.get(
+            AVATAR_URL,
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 500
+        assert_message_response(response.json(), "Internal server error")
 
 
 # ──────────────────────────────────────────────

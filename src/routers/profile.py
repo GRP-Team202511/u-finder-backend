@@ -29,6 +29,7 @@ from src.schemas.profile import (
     UnlikeResponse,
     LikedUniversityItem,
     LikedUniversityListResponse,
+    GetAvatarResponse,
     AvatarUploadResponse,
     AvatarDeleteResponse,
     ErrorResponse,
@@ -885,6 +886,46 @@ def _find_existing_avatar(user_id: int) -> Optional[Path]:
         if candidate.exists():
             return candidate
     return None
+
+
+@router.get(
+    "/avatar",
+    response_model=GetAvatarResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Get Avatar URL",
+    description="Returns the avatar URL for the authenticated user. "
+                "If the user has no avatar, avatar_url will be null.",
+)
+async def get_avatar(
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        )
+        profile = result.scalar_one_or_none()
+
+        avatar_url = None
+        if profile and profile.basic_info:
+            avatar_url = profile.basic_info.get("avatar")
+
+        return GetAvatarResponse(avatar_url=avatar_url)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get avatar error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
 
 @router.put(

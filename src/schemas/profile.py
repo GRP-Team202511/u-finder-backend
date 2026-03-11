@@ -166,6 +166,10 @@ class LikedUniversityListResponse(BaseModel):
 
 
 # ============ Avatar ============
+class GetAvatarResponse(BaseModel):
+    avatar_url: Optional[str] = None
+
+
 class AvatarUploadResponse(BaseModel):
     message: str
     avatar_url: str
