@@ -130,6 +130,20 @@ class ConfirmResetPasswordResponse(BaseModel):
     message: str
 
 
+# ============ Delete Account ============
+class DeleteAccountResponse(BaseModel):
+    temp_token: str
+    verification: str  # "2fa" or "email"
+
+
+class VerifyDeleteRequest(BaseModel):
+    code: str
+
+
+class DeleteVerifyResponse(BaseModel):
+    message: str
+
+
 # ============ Get User Info ============
 class GetUserInfoResponse(BaseModel):
     email: str
