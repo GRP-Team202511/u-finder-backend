@@ -2,8 +2,11 @@
 U-Finder Backend Main Application
 FastAPI application entry point
 """
+from pathlib import Path
+
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import time
@@ -155,6 +158,11 @@ async def log_requests(request: Request, call_next):
     
     return response
 
+
+# Serve uploaded files (avatars, etc.)
+_uploads_dir = Path(settings.avatar_upload_dir)
+_uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Include routers
 app.include_router(auth_router)

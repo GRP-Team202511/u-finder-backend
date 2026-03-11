@@ -165,6 +165,16 @@ class LikedUniversityListResponse(BaseModel):
     data: List[LikedUniversityItem]
 
 
+# ============ Avatar ============
+class AvatarUploadResponse(BaseModel):
+    message: str
+    avatar_url: str
+
+
+class AvatarDeleteResponse(BaseModel):
+    message: str
+
+
 # ============ Common ============
 class ErrorResponse(BaseModel):
     message: str

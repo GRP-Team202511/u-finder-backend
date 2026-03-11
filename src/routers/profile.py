@@ -3,6 +3,8 @@ Profile router module
 Contains endpoints for user profile management
 """
 import json
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Header, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -27,6 +29,8 @@ from src.schemas.profile import (
     UnlikeResponse,
     LikedUniversityItem,
     LikedUniversityListResponse,
+    AvatarUploadResponse,
+    AvatarDeleteResponse,
     ErrorResponse,
     VALID_ARRAY_FIELDS,
     FIELD_DISPLAY_NAMES,
@@ -50,6 +54,18 @@ settings = get_settings()
 ALLOWED_CV_CONTENT_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+ALLOWED_AVATAR_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+
+AVATAR_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
 }
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
@@ -844,6 +860,159 @@ async def get_liked_universities(
         raise
     except Exception as e:
         logger.error(f"Get liked universities error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ──────────────────────────────────────────────
+# Avatar Upload & Delete
+# ──────────────────────────────────────────────
+
+def _avatar_dir() -> Path:
+    """Return the avatar upload directory, creating it if needed."""
+    p = Path(settings.avatar_upload_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _find_existing_avatar(user_id: int) -> Optional[Path]:
+    """Find the user's existing avatar file regardless of extension."""
+    avatar_dir = _avatar_dir()
+    for ext in AVATAR_EXTENSIONS.values():
+        candidate = avatar_dir / f"{user_id}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+@router.put(
+    "/avatar",
+    response_model=AvatarUploadResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        413: {"description": "File too large", "model": ErrorResponse},
+        415: {"description": "Unsupported file type", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Upload or Update Avatar",
+    description="Upload an image file to set or replace the user's avatar. "
+                "Only JPEG, PNG, and WebP formats are accepted. Maximum file size is 2 MB.",
+)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        # Validate content type
+        if file.content_type not in ALLOWED_AVATAR_CONTENT_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail={"message": "Only JPEG, PNG, and WebP images are allowed"},
+            )
+
+        # Read and validate size
+        file_content = await file.read()
+
+        if len(file_content) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Uploaded file is empty"},
+            )
+
+        if len(file_content) > settings.avatar_max_file_size:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"message": f"File size exceeds {settings.avatar_max_file_size // (1024 * 1024)} MB limit"},
+            )
+
+        # Delete old avatar if extension differs
+        ext = AVATAR_EXTENSIONS[file.content_type]
+        existing = _find_existing_avatar(user_id)
+        if existing is not None:
+            existing.unlink(missing_ok=True)
+
+        # Write new file
+        avatar_path = _avatar_dir() / f"{user_id}{ext}"
+        avatar_path.write_bytes(file_content)
+
+        # Update basic_info.avatar in user profile
+        avatar_url = f"/uploads/avatars/{user_id}{ext}"
+        result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        )
+        profile = result.scalar_one_or_none()
+
+        if profile:
+            basic_info = profile.basic_info or {}
+            basic_info["avatar"] = avatar_url
+            profile.basic_info = basic_info
+            await db.commit()
+
+        logger.info(f"Avatar uploaded for user_id={user_id}: {avatar_url}")
+        return AvatarUploadResponse(message="Avatar uploaded successfully", avatar_url=avatar_url)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Avatar upload error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+@router.delete(
+    "/avatar",
+    response_model=AvatarDeleteResponse,
+    responses={
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "No avatar found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Delete Avatar",
+    description="Remove the current user's avatar image from storage and profile.",
+)
+async def delete_avatar(
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    try:
+        user_id = await _get_current_user_id(authorization, db, redis)
+
+        existing = _find_existing_avatar(user_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "No avatar found"},
+            )
+
+        existing.unlink(missing_ok=True)
+
+        # Clear avatar from basic_info
+        result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == user_id)
+        )
+        profile = result.scalar_one_or_none()
+        if profile and profile.basic_info:
+            basic_info = dict(profile.basic_info)
+            basic_info.pop("avatar", None)
+            profile.basic_info = basic_info
+            await db.commit()
+
+        logger.info(f"Avatar deleted for user_id={user_id}")
+        return AvatarDeleteResponse(message="Avatar deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Avatar delete error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},
