@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import Numeric, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.constants import UserType
@@ -243,7 +243,7 @@ async def _get_llm_cost_today(db: AsyncSession, today: date) -> LlmCostToday:
     end = start + timedelta(days=1)
 
     result = await db.execute(
-        select(func.sum(func.cast(LlmUsageLog.total_price, func.numeric())))
+        select(func.sum(func.cast(LlmUsageLog.total_price, Numeric)))
         .where(LlmUsageLog.created_at >= start, LlmUsageLog.created_at < end)
     )
     raw = result.scalar()
@@ -384,7 +384,7 @@ async def _get_model_cost_snapshot(
     # avg_latency_seconds — latency_seconds is stored as String, cast to float
     avg_latency_raw = (
         await db.execute(
-            select(func.avg(func.cast(LlmUsageLog.latency_seconds, func.numeric())))
+            select(func.avg(func.cast(LlmUsageLog.latency_seconds, Numeric)))
             .where(*base_filter)
         )
     ).scalar()
@@ -400,7 +400,7 @@ async def _get_model_cost_snapshot(
     # estimated_cost — total_price is stored as String, cast to numeric
     cost_raw = (
         await db.execute(
-            select(func.sum(func.cast(LlmUsageLog.total_price, func.numeric())))
+            select(func.sum(func.cast(LlmUsageLog.total_price, Numeric)))
             .where(*base_filter)
         )
     ).scalar()
