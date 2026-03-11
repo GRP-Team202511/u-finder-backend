@@ -32,6 +32,7 @@ from src.schemas.auth import (
     GetUserInfoResponse,
     DeviceSession,
     DevicesResponse,
+    LogoutDeviceResponse,
     DeleteAccountResponse,
     VerifyDeleteRequest,
     DeleteVerifyResponse,
@@ -55,7 +56,7 @@ from redis.asyncio import Redis
 from src.config.logger import get_logger
 from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken, TotpBackupCode
-from src.utils.session_utils import save_session, get_session, delete_session, delete_all_user_sessions
+from src.utils.session_utils import save_session, get_session, delete_session, delete_session_by_hash, delete_all_user_sessions
 from src.utils.auth_deps import get_current_user_id
 from user_agents import parse as parse_ua
 
@@ -1389,6 +1390,103 @@ def _format_os(ua) -> str:
     if not family or family == "Other":
         return "Unknown"
     return f"{family} {version}".strip()
+
+
+# ============ Logout Specific Device ============
+@router.delete(
+    "/settings/devices/{session_id}",
+    response_model=LogoutDeviceResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Logout Specific Device",
+    responses={
+        200: {"description": "Device session logged out successfully", "model": LogoutDeviceResponse},
+        400: {"description": "Cannot logout current device", "model": ErrorResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "Session not found", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+)
+async def logout_device(
+    session_id: int,
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Logout a specific device by session_id.
+
+    The session_id can be obtained from GET /auth/settings/devices.
+    Logging out the current device (is_current=true) is not allowed;
+    use /auth/logout instead.
+
+    - **session_id**: ID of the session to revoke (path parameter)
+    - **Authorization**: Bearer token (refresh token) in header
+    """
+    try:
+        user_id = await get_current_user_id(authorization, db, redis)
+
+        # Hash the current token to identify the caller's own session
+        current_token = authorization.replace("Bearer ", "")
+        current_token_hashed = hash_token(current_token)
+
+        # Look up the session, ensuring it belongs to the current user
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.id == session_id,
+                RefreshToken.user_id == user_id,
+            )
+        )
+        session = result.scalar_one_or_none()
+
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Session not found"},
+            )
+
+        # Prevent logging out the current device
+        if session.token_hashed == current_token_hashed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Cannot logout current device, use /auth/logout instead"},
+            )
+
+        token_hashed = session.token_hashed
+
+        # Clean Redis cache BEFORE committing the DB delete.
+        # get_current_user_id trusts Redis on cache hit, so if we
+        # committed the DB row first and Redis cleanup failed, the
+        # revoked token would remain usable and the user couldn't retry.
+        if redis:
+            await delete_session_by_hash(redis, token_hashed, user_id)
+
+        # Delete from DB (include user_id to prevent TOCTOU races)
+        delete_result = await db.execute(
+            delete(RefreshToken).where(
+                RefreshToken.id == session_id,
+                RefreshToken.user_id == user_id,
+            )
+        )
+        if delete_result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Session not found"},
+            )
+        await db.commit()
+
+        logger.info(f"Logout device session_id={session_id} for user_id={user_id}")
+
+        return LogoutDeviceResponse(message="Device session has been logged out")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Logout device error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
 
 # ============ Get Devices ============

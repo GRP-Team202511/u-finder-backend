@@ -166,6 +166,10 @@ class DevicesResponse(BaseModel):
     total: int
 
 
+class LogoutDeviceResponse(BaseModel):
+    message: str
+
+
 # ============ Error Response ============
 class ErrorResponse(BaseModel):
     message: str
