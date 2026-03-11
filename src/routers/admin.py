@@ -295,8 +295,8 @@ def _get_logs_preview(
     # Parse log entries
     entries = _parse_log_file(target_date, level)
 
-    # Take the 5 most recent (file is chronological, so take the tail)
-    return entries[-5:] if len(entries) > 5 else entries
+    # Take the 5 most recent, returned in time DESC order (newest first)
+    return list(reversed(entries[-5:])) if len(entries) > 5 else list(reversed(entries))
 
 
 def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
