@@ -137,6 +137,21 @@ class GetUserInfoResponse(BaseModel):
     user_type: int
 
 
+# ============ Get Devices ============
+class DeviceSession(BaseModel):
+    session_id: int
+    browser: str
+    os: str
+    device_type: str
+    created_at: str
+    is_current: bool
+
+
+class DevicesResponse(BaseModel):
+    devices: list[DeviceSession]
+    total: int
+
+
 # ============ Error Response ============
 class ErrorResponse(BaseModel):
     message: str

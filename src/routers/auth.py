@@ -30,6 +30,8 @@ from src.schemas.auth import (
     ConfirmResetPasswordRequest,
     ConfirmResetPasswordResponse,
     GetUserInfoResponse,
+    DeviceSession,
+    DevicesResponse,
     ErrorResponse,
 )
 from src.utils import (
@@ -49,6 +51,7 @@ from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
 from src.utils.session_utils import save_session, get_session, delete_session, delete_all_user_sessions
 from src.utils.auth_deps import get_current_user_id
+from user_agents import parse as parse_ua
 
 logger = get_logger(__name__)
 
@@ -1054,6 +1057,105 @@ async def logout_all_devices(
     except Exception as e:
         logger.error(f"Logout all devices error: {str(e)}")
         await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+def _parse_device_type(ua) -> str:
+    """Map user_agents flags to a device_type string."""
+    if ua.is_bot:
+        return "Bot"
+    if ua.is_tablet:
+        return "Tablet"
+    if ua.is_mobile:
+        return "Mobile"
+    if ua.is_pc:
+        return "PC"
+    return "Unknown"
+
+
+def _format_browser(ua) -> str:
+    """Return '<family> <major>' or 'Unknown'."""
+    family = ua.browser.family
+    version = ua.browser.version_string
+    if not family or family == "Other":
+        return "Unknown"
+    # Only include major version for readability
+    major = version.split(".")[0] if version else ""
+    return f"{family} {major}".strip()
+
+
+def _format_os(ua) -> str:
+    """Return '<os_family> <os_version>' or 'Unknown'."""
+    family = ua.os.family
+    version = ua.os.version_string
+    if not family or family == "Other":
+        return "Unknown"
+    return f"{family} {version}".strip()
+
+
+# ============ Get Devices ============
+@router.get(
+    "/settings/devices",
+    response_model=DevicesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get All Device Login Sessions",
+    responses={
+        200: {"description": "Successfully retrieved device list", "model": DevicesResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+)
+async def get_devices(
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Returns all active login sessions for the current user.
+
+    Each session includes parsed browser, OS, and device type information
+    derived from the stored User-Agent string, as well as whether it is
+    the session making the current request.
+
+    - **Authorization**: Bearer token (refresh token) in header
+    """
+    try:
+        user_id = await get_current_user_id(authorization, db, redis)
+
+        # Extract current token hash for is_current comparison
+        current_token = authorization.replace("Bearer ", "")
+        current_token_hashed = hash_token(current_token)
+
+        # Fetch all non-expired sessions for the user
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.expire_at > datetime.now(timezone.utc),
+            )
+        )
+        sessions = result.scalars().all()
+
+        devices = []
+        for s in sessions:
+            ua = parse_ua(s.user_agent or "")
+            devices.append(DeviceSession(
+                session_id=s.id,
+                browser=_format_browser(ua),
+                os=_format_os(ua),
+                device_type=_parse_device_type(ua),
+                created_at=s.created_at.isoformat() if s.created_at else "",
+                is_current=(s.token_hashed == current_token_hashed),
+            ))
+
+        return DevicesResponse(devices=devices, total=len(devices))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get devices error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},
