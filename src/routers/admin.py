@@ -177,7 +177,7 @@ async def admin_login(
     response_model=AdminDashboardSummary,
 )
 async def get_dashboard_summary(
-    logs_date: Optional[date] = Query(None, description="Date for logs preview (YYYY-MM-DD)"),
+    logs_date: Optional[str] = Query(None, description="Date for logs preview (YYYY-MM-DD), defaults to today"),
     logs_level: Optional[str] = Query("all", regex="^(all|info|warn|error)$"),
     cost_model: Optional[str] = Query("chat", regex="^(chat|cv_parsing)$"),
     cost_time_range: Optional[str] = Query("last_24h", regex="^(last_24h|last_7d|last_1m)$"),
@@ -187,6 +187,18 @@ async def get_dashboard_summary(
     """Return the all-in-one dashboard payload."""
     now = datetime.now(timezone.utc)
     today = now.date()
+
+    # Parse logs_date: treat None or empty string as today
+    if logs_date:
+        try:
+            parsed_logs_date = date.fromisoformat(logs_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Invalid date format, expected YYYY-MM-DD"},
+            )
+    else:
+        parsed_logs_date = today
 
     # ── KPI: total_users ────────────────────────────────────────────────
     total_users = (await db.execute(select(func.count(Account.user_id)))).scalar() or 0
@@ -206,8 +218,7 @@ async def get_dashboard_summary(
     recent_users = await _get_recent_users(db, limit=3)
 
     # ── System Logs Preview ─────────────────────────────────────────────
-    target_date = logs_date or today
-    recent_logs = _get_logs_preview(target_date, logs_level or "all")
+    recent_logs = _get_logs_preview(parsed_logs_date, logs_level or "all")
 
     # ── Model Cost Snapshot ─────────────────────────────────────────────
     model_cost_snapshot = await _get_model_cost_snapshot(
