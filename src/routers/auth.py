@@ -32,6 +32,9 @@ from src.schemas.auth import (
     GetUserInfoResponse,
     DeviceSession,
     DevicesResponse,
+    DeleteAccountResponse,
+    VerifyDeleteRequest,
+    DeleteVerifyResponse,
     ErrorResponse,
 )
 from src.utils import (
@@ -1074,6 +1077,83 @@ def _parse_device_type(ua) -> str:
     if ua.is_pc:
         return "PC"
     return "Unknown"
+
+
+# ============ Delete Account ============
+@router.delete(
+    "/delete",
+    response_model=DeleteAccountResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete Account",
+    responses={
+        200: {"description": "Deletion initiated", "model": DeleteAccountResponse},
+        401: {"description": "Invalid or expired token", "model": ErrorResponse},
+    },
+)
+async def delete_account(
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Initiate account deletion for the currently authenticated user.
+
+    - If 2FA is enabled, returns `verification: "2fa"`.
+    - Otherwise, sends a verification code to email and returns `verification: "email"`.
+    """
+    try:
+        user_id = await get_current_user_id(authorization, db, redis)
+
+        result = await db.execute(
+            select(Account).where(Account.user_id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        # Create temp token for deletion verification
+        temp_token_raw = create_temp_token()
+        temp_record = TempToken(
+            user_id=user.user_id,
+            token_hashed=hash_token(temp_token_raw),
+            token_type=TokenType.DELETE_ACCOUNT,
+            expire_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+
+        if user.is_2fa_enabled:
+            db.add(temp_record)
+            await db.commit()
+            logger.info(f"Delete account initiated (2fa) for user_id={user.user_id}")
+            return DeleteAccountResponse(temp_token=temp_token_raw, verification="2fa")
+
+        # No 2FA — send email verification code
+        verification_code = generate_verification_code()
+        temp_record.verification_code_hashed = hash_password(verification_code)
+        db.add(temp_record)
+        await db.commit()
+
+        await send_verification_email(
+            to_email=user.email,
+            verification_code=verification_code,
+            name=user.user_name,
+            email_type="delete",
+        )
+
+        logger.info(f"Delete account initiated (email) for user_id={user.user_id}")
+        return DeleteAccountResponse(temp_token=temp_token_raw, verification="email")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete account error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
 
 def _format_browser(ua) -> str:

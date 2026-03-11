@@ -35,3 +35,4 @@ class TokenType:
     PASSWORD_RESET = "password_reset"
     EMAIL_CHANGE = "email_change"
     TWO_FACTOR_VERIFY = "2fa_verify"
+    DELETE_ACCOUNT = "delete_account"
