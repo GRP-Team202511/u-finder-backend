@@ -47,11 +47,14 @@ from src.utils import (
     verify_password,
     send_verification_email,
     get_token_data,
+    decrypt_secret,
+    verify_totp_code,
+    check_totp_replay,
 )
 from redis.asyncio import Redis
 from src.config.logger import get_logger
 from src.config.constants import TokenType, UserType
-from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken
+from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken, TotpBackupCode
 from src.utils.session_utils import save_session, get_session, delete_session, delete_all_user_sessions
 from src.utils.auth_deps import get_current_user_id
 from user_agents import parse as parse_ua
@@ -1150,6 +1153,121 @@ async def delete_account(
         raise
     except Exception as e:
         logger.error(f"Delete account error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+def _is_backup_code_format(code: str) -> bool:
+    """Return True if code looks like a backup code (8-char hex)."""
+    return len(code) == 8 and all(c in "0123456789ABCDEFabcdef" for c in code)
+
+
+# ============ Delete Account - Verify 2FA ============
+@router.post(
+    "/delete/2fa",
+    response_model=DeleteVerifyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Verify 2FA for Account Deletion",
+    responses={
+        200: {"description": "Account deleted successfully", "model": DeleteVerifyResponse},
+        400: {"description": "Invalid verification code", "model": ErrorResponse},
+        401: {"description": "Invalid or expired temp token", "model": ErrorResponse},
+    },
+)
+async def verify_delete_2fa(
+    request: VerifyDeleteRequest,
+    temp_token: str = Header(..., alias="Temp-Token"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Complete account deletion by verifying a TOTP code or backup code.
+    """
+    try:
+        temp_token_hashed = hash_token(temp_token)
+        result = await db.execute(
+            select(TempToken).where(
+                TempToken.token_hashed == temp_token_hashed,
+                TempToken.token_type == TokenType.DELETE_ACCOUNT,
+            )
+        )
+        token_record = result.scalar_one_or_none()
+
+        if not token_record:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        if datetime.now(timezone.utc) > token_record.expire_at:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        # Load user
+        result = await db.execute(
+            select(Account).where(Account.user_id == token_record.user_id)
+        )
+        user = result.scalar_one_or_none()
+        if not user or not user.is_2fa_enabled or not user.totp_secret_encrypted:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        code = request.code.strip()
+        verified = False
+
+        if not _is_backup_code_format(code):
+            secret = decrypt_secret(user.totp_secret_encrypted)
+            verified = verify_totp_code(secret, code)
+            if verified and redis and await check_totp_replay(redis, user.user_id, code):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"message": "TOTP code already used, please wait for a new code"},
+                )
+        else:
+            result = await db.execute(
+                select(TotpBackupCode).where(
+                    TotpBackupCode.user_id == user.user_id,
+                    TotpBackupCode.is_used == False,  # noqa: E712
+                )
+            )
+            for bc in result.scalars().all():
+                if verify_password(code.upper(), bc.code_hashed):
+                    verified = True
+                    break
+
+        if not verified:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Invalid verification code"},
+            )
+
+        # Delete all sessions from Redis
+        if redis:
+            await delete_all_user_sessions(redis, user.user_id)
+
+        # Delete account (CASCADE handles all related data)
+        await db.delete(token_record)
+        await db.delete(user)
+        await db.commit()
+
+        logger.info(f"Account deleted via 2FA for user_id={user.user_id}")
+        return DeleteVerifyResponse(message="Account deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete account 2FA verify error: {str(e)}")
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},
