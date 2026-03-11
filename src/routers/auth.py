@@ -1139,12 +1139,21 @@ async def delete_account(
         db.add(temp_record)
         await db.commit()
 
-        await send_verification_email(
+        email_sent = await send_verification_email(
             to_email=user.email,
             verification_code=verification_code,
             name=user.user_name,
             email_type="delete",
         )
+
+        if not email_sent:
+            await db.delete(temp_record)
+            await db.commit()
+            logger.error(f"Failed to send delete verification email for user_id={user.user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"message": "Failed to send verification email. Please try again later."},
+            )
 
         logger.info(f"Delete account initiated (email) for user_id={user.user_id}")
         return DeleteAccountResponse(temp_token=temp_token_raw, verification="email")

@@ -95,6 +95,20 @@ class TestDeleteAccount:
         call_kwargs = mock_send_email.call_args
         assert call_kwargs.kwargs.get("email_type") == "delete" or call_kwargs[1].get("email_type") == "delete"
 
+    @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock, return_value=False)
+    async def test_delete_initiate_email_send_failure(self, mock_send_email, client, mock_db, mock_redis):
+        """Email send fails → 500, temp token cleaned up."""
+        _setup_redis_hit(mock_redis)
+        account = _make_account(is_2fa_enabled=False)
+        mock_db.execute.return_value = _db_result(account)
+
+        response = await client.delete(DELETE_URL, headers=AUTH_HEADERS)
+
+        assert response.status_code == 500
+        assert_message_response(response.json(), "Failed to send verification email. Please try again later.")
+        # Verify temp token was cleaned up (db.delete called)
+        mock_db.delete.assert_awaited()
+
     async def test_delete_initiate_2fa_path(self, client, mock_db, mock_redis):
         """2FA user → 200 with verification='2fa', no email sent."""
         _setup_redis_hit(mock_redis)

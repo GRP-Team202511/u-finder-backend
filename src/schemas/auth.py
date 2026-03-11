@@ -2,7 +2,7 @@
 Authentication related Pydantic models
 """
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional
+from typing import Literal, Optional
 import re
 
 
@@ -133,7 +133,7 @@ class ConfirmResetPasswordResponse(BaseModel):
 # ============ Delete Account ============
 class DeleteAccountResponse(BaseModel):
     temp_token: str
-    verification: str  # "2fa" or "email"
+    verification: Literal["2fa", "email"]
 
 
 class VerifyDeleteRequest(BaseModel):
