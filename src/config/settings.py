@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # CV Upload Settings
     cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB
 
+    # Avatar Upload Settings
+    avatar_max_file_size: int = 2 * 1024 * 1024  # 2 MB
+    avatar_upload_dir: str = "uploads/avatars"
+
     # Workers
     workers: int = 4
 
