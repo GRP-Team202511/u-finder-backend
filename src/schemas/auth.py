@@ -2,7 +2,7 @@
 Authentication related Pydantic models
 """
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional
+from typing import Literal, Optional
 import re
 
 
@@ -127,6 +127,20 @@ class ConfirmResetPasswordRequest(BaseModel):
 
 
 class ConfirmResetPasswordResponse(BaseModel):
+    message: str
+
+
+# ============ Delete Account ============
+class DeleteAccountResponse(BaseModel):
+    temp_token: str
+    verification: Literal["2fa", "email"]
+
+
+class VerifyDeleteRequest(BaseModel):
+    code: str
+
+
+class DeleteVerifyResponse(BaseModel):
     message: str
 
 
