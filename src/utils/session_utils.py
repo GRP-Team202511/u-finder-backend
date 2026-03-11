@@ -135,6 +135,32 @@ async def delete_session(redis: Redis, token: str) -> None:
         logger.error(f"Failed to delete session from Redis: {str(e)}")
 
 
+async def delete_session_by_hash(redis: Redis, token_hashed: str, user_id: int) -> None:
+    """
+    Delete a single session from Redis using the token hash directly.
+
+    Used when we have the hashed token from the DB (e.g. deleting by session_id)
+    rather than the plain-text token.
+
+    Args:
+        redis:        Redis client
+        token_hashed: HMAC-SHA256 digest of the refresh token
+        user_id:      User's ID (to clean the index set)
+    """
+    try:
+        session_key = f"session:{token_hashed}"
+        index_key = _user_index_key(user_id)
+
+        pipe = redis.pipeline()
+        pipe.delete(session_key)
+        pipe.srem(index_key, token_hashed)
+        await pipe.execute()
+
+        logger.debug(f"Session deleted from Redis by hash for user_id={user_id}")
+    except Exception as e:
+        logger.error(f"Failed to delete session by hash for user_id={user_id}: {str(e)}")
+
+
 async def delete_all_user_sessions(redis: Redis, user_id: int) -> int:
     """
     Delete ALL cached sessions for a given user (e.g. forced sign-out all devices).
