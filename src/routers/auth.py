@@ -1274,6 +1274,94 @@ async def verify_delete_2fa(
         )
 
 
+# ============ Delete Account - Verify Email ============
+@router.post(
+    "/delete/email",
+    response_model=DeleteVerifyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Verify Email for Account Deletion",
+    responses={
+        200: {"description": "Account deleted successfully", "model": DeleteVerifyResponse},
+        401: {"description": "Invalid or expired token / wrong code", "model": ErrorResponse},
+    },
+)
+async def verify_delete_email(
+    request: VerifyDeleteRequest,
+    temp_token: str = Header(..., alias="Temp-Token"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Complete account deletion by verifying the email verification code.
+    """
+    try:
+        temp_token_hashed = hash_token(temp_token)
+        result = await db.execute(
+            select(TempToken).where(
+                TempToken.token_hashed == temp_token_hashed,
+                TempToken.token_type == TokenType.DELETE_ACCOUNT,
+            )
+        )
+        token_record = result.scalar_one_or_none()
+
+        if not token_record:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        if datetime.now(timezone.utc) > token_record.expire_at:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        # Verify email code
+        if not token_record.verification_code_hashed or not verify_password(
+            request.code, token_record.verification_code_hashed
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Wrong code or expired token"},
+            )
+
+        # Load user
+        result = await db.execute(
+            select(Account).where(Account.user_id == token_record.user_id)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"message": "Invalid or expired token"},
+            )
+
+        # Delete all sessions from Redis
+        if redis:
+            await delete_all_user_sessions(redis, user.user_id)
+
+        # Delete account (CASCADE handles all related data)
+        await db.delete(token_record)
+        await db.delete(user)
+        await db.commit()
+
+        logger.info(f"Account deleted via email verification for user_id={user.user_id}")
+        return DeleteVerifyResponse(message="Account deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete account email verify error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
 def _format_browser(ua) -> str:
     """Return '<family> <major>' or 'Unknown'."""
     family = ua.browser.family
