@@ -1,7 +1,6 @@
 """
 Router tests for DELETE /auth/settings/devices/{session_id}
 """
-import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi import HTTPException, status
 from tests.routers.utils.response_asserts import assert_message_response

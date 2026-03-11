@@ -1453,15 +1453,26 @@ async def logout_device(
 
         token_hashed = session.token_hashed
 
-        # Delete from DB
-        await db.execute(
-            delete(RefreshToken).where(RefreshToken.id == session_id)
-        )
-        await db.commit()
-
-        # Delete from Redis
+        # Clean Redis cache BEFORE committing the DB delete.
+        # get_current_user_id trusts Redis on cache hit, so if we
+        # committed the DB row first and Redis cleanup failed, the
+        # revoked token would remain usable and the user couldn't retry.
         if redis:
             await delete_session_by_hash(redis, token_hashed, user_id)
+
+        # Delete from DB (include user_id to prevent TOCTOU races)
+        delete_result = await db.execute(
+            delete(RefreshToken).where(
+                RefreshToken.id == session_id,
+                RefreshToken.user_id == user_id,
+            )
+        )
+        if delete_result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Session not found"},
+            )
+        await db.commit()
 
         logger.info(f"Logout device session_id={session_id} for user_id={user_id}")
 
