@@ -1,7 +1,6 @@
 """
 Router tests for POST /api/admin/auth/login
 """
-import pytest
 from unittest.mock import MagicMock
 from src.config.constants import UserType
 from src.utils.password_utils import hash_password

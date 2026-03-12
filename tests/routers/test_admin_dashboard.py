@@ -1,7 +1,6 @@
 """
 Router tests for GET /api/admin/dashboard/summary
 """
-import pytest
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -143,6 +142,24 @@ class TestDashboardAuth:
 
         assert response.status_code == 403
         assert_message_response(response.json(), "Admin permission required")
+
+    async def test_invalid_logs_date(self, client, mock_db):
+        """An invalid logs_date value must return 422."""
+        admin = _make_admin_account()
+        # require_admin needs a successful DB lookup first
+        r0 = MagicMock()
+        r0.scalar_one_or_none.return_value = admin
+        mock_db.execute.return_value = r0
+
+        response = await client.get(
+            DASHBOARD_URL,
+            headers=_admin_auth_header(),
+            params={"logs_date": "not-a-date"},
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["message"] == "Invalid date format, expected YYYY-MM-DD"
 
 
 # ── Success Tests ─────────────────────────────────────────────────────────────

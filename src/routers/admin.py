@@ -301,17 +301,20 @@ def _get_logs_preview(
 ) -> List[LogEntry]:
     """
     Read log entries from the on-disk log file for the given date and
-    level filter.  Returns up to 5 most recent entries.
+    level filter.  Returns up to 5 most recent entries (newest first).
     """
-    # Parse log entries
-    entries = _parse_log_file(target_date, level)
-
-    # Take the 5 most recent, returned in time DESC order (newest first)
-    return list(reversed(entries[-5:])) if len(entries) > 5 else list(reversed(entries))
+    entries = _parse_log_file(target_date, level, limit=5)
+    return entries
 
 
-def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
-    """Parse a single day's log file and return matching entries."""
+def _parse_log_file(target_date: date, level: str, *, limit: int = 5) -> List[LogEntry]:
+    """
+    Parse a single day's log file and return up to *limit* most recent
+    matching entries in newest-first order.
+
+    Reads from the end of the file to avoid scanning potentially large
+    logs when only a handful of recent entries are needed.
+    """
     log_file = LOG_DIR / f"app_{target_date.strftime('%Y%m%d')}.log"
     if not log_file.exists():
         return []
@@ -328,25 +331,32 @@ def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
     entries: List[LogEntry] = []
     try:
         with open(log_file, "r", encoding="utf-8") as fh:
-            for raw_line in fh:
-                m = _LOG_LINE_RE.match(raw_line.strip())
-                if not m:
-                    continue
-                normalised = level_map.get(m.group("level"), "info")
+            lines = fh.readlines()
 
-                # Apply level filter
-                if level != "all" and normalised != level:
-                    continue
+        # Iterate from the end so we can stop early once we have enough
+        for raw_line in reversed(lines):
+            if len(entries) >= limit:
+                break
 
-                ts = datetime.strptime(m.group("datetime"), "%Y-%m-%d %H:%M:%S").replace(
-                    tzinfo=timezone.utc
-                )
-                entries.append(
-                    LogEntry(time=ts, level=normalised, message=m.group("message"))
-                )
+            m = _LOG_LINE_RE.match(raw_line.strip())
+            if not m:
+                continue
+            normalised = level_map.get(m.group("level"), "info")
+
+            # Apply level filter
+            if level != "all" and normalised != level:
+                continue
+
+            ts = datetime.strptime(m.group("datetime"), "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+            entries.append(
+                LogEntry(time=ts, level=normalised, message=m.group("message"))
+            )
     except OSError:
         logger.warning("Failed to read log file: %s", log_file)
 
+    # entries were collected newest-first; return in that order
     return entries
 
 

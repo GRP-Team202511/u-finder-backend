@@ -2,7 +2,6 @@
 LLM Usage Service
 Persists per-request Dify usage data to the llm_usage_log table.
 """
-from decimal import Decimal
 from typing import Optional
 
 from src.config.logger import get_logger
@@ -32,6 +31,8 @@ async def record_chat_usage(
     """
     try:
         async with AsyncSessionLocal() as session:
+            latency = _safe_float(usage.get("latency"))
+            price = usage.get("total_price")
             row = LlmUsageLog(
                 user_id=user_id,
                 source="chat",
@@ -39,9 +40,9 @@ async def record_chat_usage(
                 prompt_tokens=_safe_int(usage.get("prompt_tokens")),
                 completion_tokens=_safe_int(usage.get("completion_tokens")),
                 total_tokens=_safe_int(usage.get("total_tokens")) or 0,
-                latency_seconds=_safe_float(usage.get("latency")),
-                total_price=usage.get("total_price"),  # already Decimal or None
-                currency=usage.get("currency", "USD"),
+                latency_seconds=str(latency) if latency is not None else None,
+                total_price=str(price) if price is not None else None,
+                currency=usage.get("currency") or "USD",
                 dify_message_id=usage.get("message_id"),
                 dify_conversation_id=usage.get("conversation_id"),
             )
@@ -73,12 +74,13 @@ async def record_workflow_usage(
     """
     try:
         async with AsyncSessionLocal() as session:
+            latency = _safe_float(usage.get("elapsed_time"))
             row = LlmUsageLog(
                 user_id=user_id,
                 source="cv_parsing",
                 endpoint=endpoint,
                 total_tokens=_safe_int(usage.get("total_tokens")) or 0,
-                latency_seconds=_safe_float(usage.get("elapsed_time")),
+                latency_seconds=str(latency) if latency is not None else None,
                 total_steps=_safe_int(usage.get("total_steps")),
                 dify_workflow_run_id=usage.get("workflow_run_id"),
                 # Workflow responses don't include price — leave null

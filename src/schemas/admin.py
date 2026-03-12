@@ -69,7 +69,7 @@ class ModelCostSnapshot(BaseModel):
     total_requests: int = 0
     avg_latency_seconds: Optional[float] = None
     tokens_total: int = 0
-    estimated_cost: Money = Money()
+    estimated_cost: Money = Field(default_factory=Money)
 
 
 # ============ Dashboard Summary — top-level ============
