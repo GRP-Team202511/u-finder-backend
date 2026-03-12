@@ -128,7 +128,7 @@ class TestDeleteUser:
         )
 
         assert response.status_code == 404
-        assert_message_response(response.json(), "Resource not found")
+        assert_message_response(response.json(), "User not found")
 
         # Verify no deletion occurred
         mock_db.delete.assert_not_called()

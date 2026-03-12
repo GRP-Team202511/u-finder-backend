@@ -321,7 +321,7 @@ async def delete_user(
         if not account:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "Resource not found"},
+                detail={"message": "User not found"},
             )
 
         # Delete avatar files from disk
