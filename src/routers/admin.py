@@ -2,11 +2,13 @@
 Admin router module.
 
 Endpoints implemented:
-- POST /api/admin/auth/login
-- GET  /api/admin/dashboard/summary
-- GET  /api/admin/users
+- POST   /api/admin/auth/login
+- GET    /api/admin/dashboard/summary
+- GET    /api/admin/users
+- DELETE /api/admin/users/{user_id}
 """
 import re
+import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -20,6 +22,7 @@ from src.config.logger import get_logger
 from src.database import get_db, Account
 from src.database.models import LlmUsageLog
 from src.schemas.admin import (
+    ActionResult,
     AdminDashboardSummary,
     AdminLoginRequest,
     AdminLoginResponse,
@@ -284,7 +287,72 @@ async def list_users(
         )
 
 
+# ── DELETE /api/admin/users/{user_id} ─────────────────────────────────
+
+@router.delete(
+    "/users/{userId}",
+    response_model=ActionResult,
+    responses={
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Valid token but user is not admin, or attempting self-deletion"},
+        404: {"description": "Requested resource does not exist"},
+        422: {"description": "Missing or invalid Authorization header"},
+    },
+    summary="Delete user",
+)
+async def delete_user(
+    userId: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete a user account and all associated data."""
+    # Prevent self-deletion
+    if userId == admin.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot delete your own account"},
+        )
+
+    try:
+        result = await db.execute(
+            select(Account).where(Account.user_id == userId)
+        )
+        account = result.scalar_one_or_none()
+
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "User not found"},
+            )
+
+        # Delete account (cascades to profile, refresh_tokens, etc.)
+        await db.delete(account)
+        await db.commit()
+
+        # Delete avatar files from disk (after DB commit succeeds)
+        _cleanup_avatar_files(userId)
+
+        logger.info("Admin %s deleted user %s", admin.user_id, userId)
+        return ActionResult(result="success")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Error deleting user %s", userId)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
 # ── Private helpers ──────────────────────────────────────────────────
+
+def _cleanup_avatar_files(user_id: int) -> None:
+    """Remove the user's avatar directory from disk, if it exists."""
+    avatar_dir = Path("uploads") / "avatars" / str(user_id)
+    if avatar_dir.is_dir():
+        shutil.rmtree(avatar_dir, ignore_errors=True)
 
 async def _get_llm_cost_today(db: AsyncSession, today: date) -> LlmCostToday:
     """SUM(total_price) from llm_usage_log where created_at::date = today."""
