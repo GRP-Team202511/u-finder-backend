@@ -289,24 +289,24 @@ async def list_users(
 # ── DELETE /api/admin/users/{user_id} ─────────────────────────────────
 
 @router.delete(
-    "/users/{user_id}",
+    "/users/{userId}",
     response_model=ActionResult,
     responses={
         401: {"description": "Missing, malformed, or expired Bearer token"},
         403: {"description": "Valid token but user is not admin, or attempting self-deletion"},
-        404: {"description": "Target user not found"},
+        404: {"description": "Requested resource does not exist"},
         422: {"description": "Missing or invalid Authorization header"},
     },
     summary="Delete user",
 )
 async def delete_user(
-    user_id: int,
+    userId: int,
     admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Permanently delete a user account and all associated data."""
     # Prevent self-deletion
-    if user_id == admin.user_id:
+    if userId == admin.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"message": "Cannot delete your own account"},
@@ -314,31 +314,31 @@ async def delete_user(
 
     try:
         result = await db.execute(
-            select(Account).where(Account.user_id == user_id)
+            select(Account).where(Account.user_id == userId)
         )
         account = result.scalar_one_or_none()
 
         if not account:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "User not found"},
+                detail={"message": "Resource not found"},
             )
 
         # Delete avatar files from disk
-        _cleanup_avatar_files(user_id)
+        _cleanup_avatar_files(userId)
 
         # Delete account (cascades to profile, refresh_tokens, etc.)
         await db.delete(account)
         await db.commit()
 
-        logger.info("Admin %s deleted user %s", admin.user_id, user_id)
+        logger.info("Admin %s deleted user %s", admin.user_id, userId)
         return ActionResult(result="success")
 
     except HTTPException:
         raise
     except Exception as e:
         await db.rollback()
-        logger.exception(f"Error deleting user {user_id}: {str(e)}")
+        logger.exception(f"Error deleting user {userId}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},

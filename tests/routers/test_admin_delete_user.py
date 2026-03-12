@@ -16,7 +16,7 @@ from src.config.constants import UserType
 from src.utils.jwt_utils import create_access_token
 from tests.routers.utils.response_asserts import assert_message_response
 
-DELETE_URL = "/api/admin/users/{user_id}"
+DELETE_URL = "/api/admin/users/{userId}"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ class TestDeleteUser:
         ]
 
         response = await client.delete(
-            DELETE_URL.format(user_id=5), headers=_admin_auth_header()
+            DELETE_URL.format(userId=5), headers=_admin_auth_header()
         )
 
         assert response.status_code == 200
@@ -107,7 +107,7 @@ class TestDeleteUser:
         mock_db.execute.return_value = _make_db_result(admin)
 
         response = await client.delete(
-            DELETE_URL.format(user_id=99), headers=_admin_auth_header(user_id=99)
+            DELETE_URL.format(userId=99), headers=_admin_auth_header(user_id=99)
         )
 
         assert response.status_code == 403
@@ -124,11 +124,11 @@ class TestDeleteUser:
         ]
 
         response = await client.delete(
-            DELETE_URL.format(user_id=999), headers=_admin_auth_header()
+            DELETE_URL.format(userId=999), headers=_admin_auth_header()
         )
 
         assert response.status_code == 404
-        assert_message_response(response.json(), "User not found")
+        assert_message_response(response.json(), "Resource not found")
 
         # Verify no deletion occurred
         mock_db.delete.assert_not_called()
@@ -136,13 +136,13 @@ class TestDeleteUser:
 
     async def test_delete_user_missing_auth_header(self, client):
         """Missing Authorization header -> 422."""
-        response = await client.delete(DELETE_URL.format(user_id=5))
+        response = await client.delete(DELETE_URL.format(userId=5))
         assert response.status_code == 422
 
     async def test_delete_user_invalid_token(self, client, mock_db):
         """Invalid Bearer token -> 401."""
         response = await client.delete(
-            DELETE_URL.format(user_id=5),
+            DELETE_URL.format(userId=5),
             headers={"Authorization": "Bearer invalid-token"},
         )
 
@@ -155,7 +155,7 @@ class TestDeleteUser:
         mock_db.execute.return_value = _make_db_result(student)
 
         response = await client.delete(
-            DELETE_URL.format(user_id=5), headers=_admin_auth_header()
+            DELETE_URL.format(userId=5), headers=_admin_auth_header()
         )
 
         assert response.status_code == 403
@@ -166,7 +166,7 @@ class TestDeleteUser:
         mock_db.execute.return_value = _make_db_result(None)
 
         response = await client.delete(
-            DELETE_URL.format(user_id=5), headers=_admin_auth_header()
+            DELETE_URL.format(userId=5), headers=_admin_auth_header()
         )
 
         assert response.status_code == 401
@@ -184,7 +184,7 @@ class TestDeleteUser:
         ]
 
         response = await client.delete(
-            DELETE_URL.format(user_id=10), headers=_admin_auth_header()
+            DELETE_URL.format(userId=10), headers=_admin_auth_header()
         )
 
         assert response.status_code == 200
