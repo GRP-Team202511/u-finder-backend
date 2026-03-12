@@ -4,6 +4,7 @@ Admin router module.
 Endpoints implemented:
 - POST /api/admin/auth/login
 - GET  /api/admin/dashboard/summary
+- GET  /api/admin/users
 """
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -233,6 +234,54 @@ async def get_dashboard_summary(
         recent_logs=recent_logs,
         model_cost_snapshot=model_cost_snapshot,
     )
+
+
+# ── GET /api/admin/users ──────────────────────────────────────────────
+
+@router.get(
+    "/users",
+    response_model=List[AdminUser],
+    responses={
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Valid token but user is not admin"},
+        422: {"description": "Missing or invalid Authorization header"},
+    },
+    summary="List users",
+)
+async def list_users(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns a list of all user accounts for admin management."""
+    try:
+        result = await db.execute(select(Account).order_by(Account.user_id))
+        accounts = result.scalars().all()
+
+        users = []
+        for acc in accounts:
+            user_status = _map_status(acc)
+            users.append(
+                AdminUser(
+                    id=acc.user_id,
+                    name=acc.user_name,
+                    email=acc.email,
+                    type=str(acc.user_type),
+                    status=user_status,
+                    created_at=acc.created_at,
+                    available_actions=_available_actions(user_status),
+                )
+            )
+
+        return users
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error listing users: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
 
 
 # ── Private helpers ──────────────────────────────────────────────────
