@@ -244,6 +244,7 @@ async def get_dashboard_summary(
     responses={
         401: {"description": "Missing, malformed, or expired Bearer token"},
         403: {"description": "Valid token but user is not admin"},
+        422: {"description": "Missing or invalid Authorization header"},
     },
     summary="List users",
 )
@@ -253,7 +254,7 @@ async def list_users(
 ):
     """Returns a list of all user accounts for admin management."""
     try:
-        result = await db.execute(select(Account))
+        result = await db.execute(select(Account).order_by(Account.user_id))
         accounts = result.scalars().all()
 
         users = []
@@ -276,7 +277,7 @@ async def list_users(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error listing users: {str(e)}")
+        logger.exception(f"Error listing users: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},
