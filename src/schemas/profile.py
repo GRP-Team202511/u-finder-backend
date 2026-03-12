@@ -167,12 +167,12 @@ class LikedUniversityListResponse(BaseModel):
 
 # ============ Avatar ============
 class GetAvatarResponse(BaseModel):
-    avatar_url: Optional[str] = None
+    avatar_urls: Optional[dict] = None
 
 
 class AvatarUploadResponse(BaseModel):
     message: str
-    avatar_url: str
+    avatar_urls: dict
 
 
 class AvatarDeleteResponse(BaseModel):

@@ -2,9 +2,13 @@
 Profile router module
 Contains endpoints for user profile management
 """
+import io
 import json
+import shutil
 from pathlib import Path
 
+from PIL import Image
+import pillow_heif
 from fastapi import APIRouter, HTTPException, Header, status, Depends, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -61,13 +65,20 @@ ALLOWED_AVATAR_CONTENT_TYPES = {
     "image/jpeg",
     "image/png",
     "image/webp",
+    "image/heic",
+    "image/heif",
 }
 
 AVATAR_EXTENSIONS = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
 }
+
+# Register HEIF/HEIC opener with Pillow
+pillow_heif.register_heif_opener()
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
 
@@ -871,6 +882,9 @@ async def get_liked_universities(
 # Avatar Upload & Delete
 # ──────────────────────────────────────────────
 
+AVATAR_SIZES = [256, 64]
+
+
 def _avatar_dir() -> Path:
     """Return the avatar upload directory, creating it if needed."""
     p = Path(settings.avatar_upload_dir)
@@ -878,14 +892,57 @@ def _avatar_dir() -> Path:
     return p
 
 
-def _find_existing_avatar(user_id: int) -> Optional[Path]:
-    """Find the user's existing avatar file regardless of extension."""
-    avatar_dir = _avatar_dir()
-    for ext in AVATAR_EXTENSIONS.values():
-        candidate = avatar_dir / f"{user_id}{ext}"
-        if candidate.exists():
-            return candidate
-    return None
+def _user_avatar_dir(user_id: int) -> Path:
+    """Return the per-user avatar directory, creating it if needed."""
+    p = _avatar_dir() / str(user_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _user_avatar_exists(user_id: int) -> bool:
+    """Check if user has an avatar folder with files."""
+    d = _avatar_dir() / str(user_id)
+    return d.is_dir() and any(d.iterdir())
+
+
+def _generate_avatar_variants(file_content: bytes, ext: str, user_id: int) -> dict:
+    """
+    Save the original file and generate WebP variants at multiple sizes.
+
+    Returns a dict of variant name -> URL path.
+    """
+    user_dir = _user_avatar_dir(user_id)
+    url_prefix = f"/uploads/avatars/{user_id}"
+    avatar_urls = {}
+
+    # Save original file as-is
+    original_filename = f"original{ext}"
+    (user_dir / original_filename).write_bytes(file_content)
+    avatar_urls["original"] = f"{url_prefix}/{original_filename}"
+
+    # Open with Pillow for WebP conversion
+    img = Image.open(io.BytesIO(file_content))
+    img = img.convert("RGB")  # Ensure no alpha issues for WebP
+    width, height = img.size
+    min_dim = min(width, height)
+
+    # WebP at original size
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=85)
+    (user_dir / "original.webp").write_bytes(buf.getvalue())
+    avatar_urls["webp_original"] = f"{url_prefix}/original.webp"
+
+    # Generate smaller sizes only if original is larger
+    for size in AVATAR_SIZES:
+        if min_dim > size:
+            resized = img.copy()
+            resized.thumbnail((size, size), Image.LANCZOS)
+            buf = io.BytesIO()
+            resized.save(buf, format="WEBP", quality=85)
+            (user_dir / f"{size}.webp").write_bytes(buf.getvalue())
+            avatar_urls[f"webp_{size}"] = f"{url_prefix}/{size}.webp"
+
+    return avatar_urls
 
 
 @router.get(
@@ -895,9 +952,9 @@ def _find_existing_avatar(user_id: int) -> Optional[Path]:
         401: {"description": "Invalid or expired token", "model": ErrorResponse},
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
-    summary="Get Avatar URL",
-    description="Returns the avatar URL for the authenticated user. "
-                "If the user has no avatar, avatar_url will be null.",
+    summary="Get Avatar URLs",
+    description="Returns avatar URLs at multiple sizes for the authenticated user. "
+                "If the user has no avatar, avatar_urls will be null.",
 )
 async def get_avatar(
     authorization: str = Header(...),
@@ -912,11 +969,11 @@ async def get_avatar(
         )
         profile = result.scalar_one_or_none()
 
-        avatar_url = None
+        avatar_urls = None
         if profile and profile.basic_info:
-            avatar_url = profile.basic_info.get("avatar")
+            avatar_urls = profile.basic_info.get("avatar")
 
-        return GetAvatarResponse(avatar_url=avatar_url)
+        return GetAvatarResponse(avatar_urls=avatar_urls)
 
     except HTTPException:
         raise
@@ -939,7 +996,8 @@ async def get_avatar(
     },
     summary="Upload or Update Avatar",
     description="Upload an image file to set or replace the user's avatar. "
-                "Only JPEG, PNG, and WebP formats are accepted. Maximum file size is 2 MB.",
+                "Accepts JPEG, PNG, WebP, HEIC, and HEIF. Maximum file size is 2 MB. "
+                "Generates WebP variants at original size, 256x256, and 64x64.",
 )
 async def upload_avatar(
     file: UploadFile = File(...),
@@ -954,7 +1012,7 @@ async def upload_avatar(
         if file.content_type not in ALLOWED_AVATAR_CONTENT_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail={"message": "Only JPEG, PNG, and WebP images are allowed"},
+                detail={"message": "Only JPEG, PNG, WebP, HEIC, and HEIF images are allowed"},
             )
 
         # Read and validate size
@@ -972,18 +1030,16 @@ async def upload_avatar(
                 detail={"message": f"File size exceeds {settings.avatar_max_file_size // (1024 * 1024)} MB limit"},
             )
 
-        # Delete old avatar if extension differs
-        ext = AVATAR_EXTENSIONS[file.content_type]
-        existing = _find_existing_avatar(user_id)
-        if existing is not None:
-            existing.unlink(missing_ok=True)
+        # Remove old avatar folder
+        old_dir = _avatar_dir() / str(user_id)
+        if old_dir.is_dir():
+            shutil.rmtree(old_dir)
 
-        # Write new file
-        avatar_path = _avatar_dir() / f"{user_id}{ext}"
-        avatar_path.write_bytes(file_content)
+        # Generate original + WebP variants
+        ext = AVATAR_EXTENSIONS[file.content_type]
+        avatar_urls = _generate_avatar_variants(file_content, ext, user_id)
 
         # Update basic_info.avatar in user profile
-        avatar_url = f"/uploads/avatars/{user_id}{ext}"
         result = await db.execute(
             select(UserProfile).where(UserProfile.user_id == user_id)
         )
@@ -991,12 +1047,12 @@ async def upload_avatar(
 
         if profile:
             basic_info = profile.basic_info or {}
-            basic_info["avatar"] = avatar_url
+            basic_info["avatar"] = avatar_urls
             profile.basic_info = basic_info
             await db.commit()
 
-        logger.info(f"Avatar uploaded for user_id={user_id}: {avatar_url}")
-        return AvatarUploadResponse(message="Avatar uploaded successfully", avatar_url=avatar_url)
+        logger.info(f"Avatar uploaded for user_id={user_id}")
+        return AvatarUploadResponse(message="Avatar uploaded successfully", avatar_urls=avatar_urls)
 
     except HTTPException:
         raise
@@ -1027,14 +1083,13 @@ async def delete_avatar(
     try:
         user_id = await _get_current_user_id(authorization, db, redis)
 
-        existing = _find_existing_avatar(user_id)
-        if existing is None:
+        if not _user_avatar_exists(user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": "No avatar found"},
             )
 
-        existing.unlink(missing_ok=True)
+        shutil.rmtree(_avatar_dir() / str(user_id))
 
         # Clear avatar from basic_info
         result = await db.execute(
