@@ -9,6 +9,10 @@ from datetime import datetime
 from pathlib import Path
 import aiosmtplib
 import aiofiles
+import certifi
+import ssl
+
+tls_context = ssl.create_default_context(cafile=certifi.where())
 
 from src.config.settings import get_settings
 from src.config.logger import get_logger
@@ -68,7 +72,7 @@ async def send_verification_email(
         }
         
         # Send email using aiosmtplib
-        async with aiosmtplib.SMTP(**smtp_kwargs) as smtp:
+        async with aiosmtplib.SMTP(**smtp_kwargs, tls_context=tls_context) as smtp:
             if settings.smtp_username and settings.smtp_password:
                 await smtp.login(settings.smtp_username, settings.smtp_password)
             await smtp.send_message(message)
