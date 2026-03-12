@@ -57,10 +57,14 @@ async def send_verification_email(
             return await _save_email_to_file(to_email, verification_code, name, email_type, html_content)
         
         # Configure SMTP connection
+        # aiosmtplib naming differs from traditional frameworks:
+        #   use_tls  = implicit SSL (port 465)  ← maps to SMTP_USE_SSL
+        #   start_tls = STARTTLS (port 587)     ← maps to SMTP_USE_TLS
         smtp_kwargs = {
             "hostname": settings.smtp_host,
             "port": settings.smtp_port,
-            "use_tls": settings.smtp_use_tls,
+            "use_tls": settings.smtp_use_ssl,
+            "start_tls": settings.smtp_use_tls,
         }
         
         # Send email using aiosmtplib
