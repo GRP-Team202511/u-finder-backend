@@ -228,6 +228,65 @@ def assert_delete_conversation_200(payload: Dict[str, Any]) -> None:
     assert payload["result"], "result must be a non-empty string"
 
 
+# ── Admin module response assertions ──────────────────────────────────────────
+
+def assert_admin_login_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates POST /api/admin/auth/login 200 response.
+    Expected schema: {id: int, name: str, token: str}
+    """
+    _assert_fields(payload, ["id", "name", "token"])
+    assert isinstance(payload["id"], int), "id must be an integer"
+    assert isinstance(payload["name"], str), "name must be a string"
+    assert isinstance(payload["token"], str) and payload["token"], "token must be a non-empty string"
+
+
+def assert_admin_dashboard_summary_200(payload: Dict[str, Any]) -> None:
+    """
+    Validates GET /api/admin/dashboard/summary 200 response.
+    Expected schema:
+      {
+        total_users: int,
+        total_users_delta_week: int | null,
+        llm_cost_today: {currency: str, amount: float, budget_per_day: float | null},
+        recent_users: [{id, name, email, type, status, created_at, available_actions}],
+        recent_logs: [{time, level, message}],
+        model_cost_snapshot: {total_requests, avg_latency_seconds, tokens_total, estimated_cost}
+      }
+    """
+    _assert_fields(payload, [
+        "total_users", "total_users_delta_week", "llm_cost_today",
+        "recent_users", "recent_logs", "model_cost_snapshot",
+    ])
+    assert isinstance(payload["total_users"], int), "total_users must be an integer"
+    assert payload["total_users_delta_week"] is None or isinstance(payload["total_users_delta_week"], int), \
+        "total_users_delta_week must be int or null"
+
+    # llm_cost_today
+    cost = payload["llm_cost_today"]
+    assert isinstance(cost, dict), "llm_cost_today must be an object"
+    assert "currency" in cost and "amount" in cost, "llm_cost_today missing required fields"
+
+    # recent_users
+    assert isinstance(payload["recent_users"], list), "recent_users must be a list"
+    for user in payload["recent_users"]:
+        for key in ("id", "name", "email", "type", "status", "created_at", "available_actions"):
+            assert key in user, f"recent_users item missing '{key}'"
+        assert isinstance(user["available_actions"], list), "available_actions must be a list"
+
+    # recent_logs
+    assert isinstance(payload["recent_logs"], list), "recent_logs must be a list"
+    for log in payload["recent_logs"]:
+        for key in ("time", "level", "message"):
+            assert key in log, f"recent_logs item missing '{key}'"
+
+    # model_cost_snapshot
+    snap = payload["model_cost_snapshot"]
+    assert isinstance(snap, dict), "model_cost_snapshot must be an object"
+    for key in ("total_requests", "tokens_total", "estimated_cost"):
+        assert key in snap, f"model_cost_snapshot missing '{key}'"
+
+
 def assert_rename_conversation_200(payload: Dict[str, Any]) -> None:
     """
     Validates POST /chat/conversations/{conversation_id}/name 200 response.
