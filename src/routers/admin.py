@@ -8,6 +8,7 @@ Endpoints implemented:
 - DELETE /api/admin/users/{user_id}
 """
 import re
+import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -324,12 +325,12 @@ async def delete_user(
                 detail={"message": "User not found"},
             )
 
-        # Delete avatar files from disk
-        _cleanup_avatar_files(userId)
-
         # Delete account (cascades to profile, refresh_tokens, etc.)
         await db.delete(account)
         await db.commit()
+
+        # Delete avatar files from disk (after DB commit succeeds)
+        _cleanup_avatar_files(userId)
 
         logger.info("Admin %s deleted user %s", admin.user_id, userId)
         return ActionResult(result="success")
@@ -338,7 +339,7 @@ async def delete_user(
         raise
     except Exception as e:
         await db.rollback()
-        logger.exception(f"Error deleting user {userId}: {str(e)}")
+        logger.exception("Error deleting user %s", userId)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"message": "Internal server error"},
@@ -349,7 +350,6 @@ async def delete_user(
 
 def _cleanup_avatar_files(user_id: int) -> None:
     """Remove the user's avatar directory from disk, if it exists."""
-    import shutil
     avatar_dir = Path("uploads") / "avatars" / str(user_id)
     if avatar_dir.is_dir():
         shutil.rmtree(avatar_dir, ignore_errors=True)
