@@ -19,6 +19,7 @@ from src.config.logger import get_logger
 from src.database import get_db, Account
 from src.database.models import LlmUsageLog
 from src.schemas.admin import (
+    ActionResult,
     AdminDashboardSummary,
     AdminLoginRequest,
     AdminLoginResponse,
@@ -233,6 +234,72 @@ async def get_dashboard_summary(
         recent_logs=recent_logs,
         model_cost_snapshot=model_cost_snapshot,
     )
+
+
+# ── POST /api/admin/users/{userId}/block ───────────────────────────
+
+@router.post(
+    "/users/{userId}/block",
+    response_model=ActionResult,
+)
+async def block_user(
+    userId: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Block a user account. Operation is idempotent."""
+    result = await db.execute(select(Account).where(Account.user_id == userId))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "Resource not found"},
+        )
+
+    # Admin accounts cannot be blocked/unblocked by admin endpoints.
+    if target.user_type == UserType.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot block/unblock an admin account"},
+        )
+
+    target.is_blocked = True
+    await db.commit()
+    logger.info("Admin user_id=%s blocked user_id=%s", admin.user_id, userId)
+    return ActionResult(result="success")
+
+
+# ── POST /api/admin/users/{userId}/unblock ─────────────────────────
+
+@router.post(
+    "/users/{userId}/unblock",
+    response_model=ActionResult,
+)
+async def unblock_user(
+    userId: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unblock a user account. Operation is idempotent."""
+    result = await db.execute(select(Account).where(Account.user_id == userId))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "Resource not found"},
+        )
+
+    # Admin accounts cannot be blocked/unblocked by admin endpoints.
+    if target.user_type == UserType.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot block/unblock an admin account"},
+        )
+
+    target.is_blocked = False
+    await db.commit()
+    logger.info("Admin user_id=%s unblocked user_id=%s", admin.user_id, userId)
+    return ActionResult(result="success")
 
 
 # ── Private helpers ──────────────────────────────────────────────────
