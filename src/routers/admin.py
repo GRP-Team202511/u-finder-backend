@@ -325,6 +325,12 @@ async def delete_user(
                 detail={"message": "User not found"},
             )
 
+        if account.user_type == UserType.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Cannot delete an admin account"},
+            )
+
         # Delete account (cascades to profile, refresh_tokens, etc.)
         await db.delete(account)
         await db.commit()
