@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     # 2FA / TOTP Settings
     totp_encryption_key: str = ""  # Base64-encoded 32-byte AES-256 key
 
+    # Passkey / WebAuthn Settings
+    webauthn_rp_id: str = "localhost"
+    webauthn_rp_name: str = "U-Finder"
+    webauthn_origin: str = "http://localhost:3000"
+    webauthn_challenge_ttl: int = 300  # seconds (5 min)
+
     @model_validator(mode="after")
     def _validate_totp_key(self) -> "Settings":
         key = self.totp_encryption_key
