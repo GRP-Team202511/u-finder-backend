@@ -3,15 +3,17 @@ Chat router module
 Provides the SSE streaming chat endpoint that proxies Dify agent responses.
 """
 import asyncio
+import json
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, Query, status, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
 from src.config.logger import get_logger
-from src.database import get_db, get_redis, RefreshToken
+from src.database import get_db, get_redis, RefreshToken, UserProfile
 from src.schemas.chat import (
     ChatStreamRequest,
     ChatMessagesResponse,
@@ -34,6 +36,11 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
+_PROFILE_FIELDS = (
+    "basic_info", "education", "academic", "test",
+    "internship", "project", "campus", "award",
+)
+
 
 # ──────────────────────────────────────────────
 # Auth helper (delegates to shared dependency)
@@ -45,6 +52,36 @@ async def _get_current_user_id(
 ) -> int:
     """Thin wrapper delegating to the shared helper."""
     return await _shared_get_current_user_id(authorization, db, redis)
+
+
+async def _get_user_profile_json(db: AsyncSession, user_id: int) -> str:
+    """Fetch the user's profile from the DB and return it as a JSON string.
+
+    Returns an empty string when no profile exists so that
+    ``stream_dify_chat`` can skip injecting the variable.
+    """
+    result = await db.execute(
+        select(UserProfile).where(UserProfile.user_id == user_id)
+    )
+    profile = result.scalar_one_or_none()
+    if not profile:
+        return ""
+
+    data: dict = {}
+    for field in _PROFILE_FIELDS:
+        value = getattr(profile, field, None)
+        if value:
+            if field == "basic_info" and isinstance(value, dict):
+                filtered = {k: v for k, v in value.items() if k != "avatar"}
+                if filtered:
+                    data[field] = filtered
+            else:
+                data[field] = value
+
+    if not data:
+        return ""
+
+    return json.dumps(data, ensure_ascii=False, default=str)
 
 
 # ──────────────────────────────────────────────
@@ -260,6 +297,9 @@ async def chat_stream(
     if conversation_id in (None, "", "null"):
         conversation_id = None
 
+    # Fetch user profile so Dify can personalise recommendations
+    user_profile_json = await _get_user_profile_json(db, user_id)
+
     # Build the SSE generator with error handling
     async def _event_generator():
         try:
@@ -267,6 +307,7 @@ async def chat_stream(
                 query=body.message,
                 user=str(user_id),
                 conversation_id=conversation_id,
+                user_profile_json=user_profile_json,
             ):
                 yield chunk
         except asyncio.CancelledError:
