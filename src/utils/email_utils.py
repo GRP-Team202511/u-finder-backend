@@ -7,6 +7,7 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from datetime import datetime
 from pathlib import Path
+from html import escape
 import aiosmtplib
 import aiofiles
 import certifi
@@ -48,7 +49,7 @@ async def send_verification_email(
         
         # Create HTML and plain text versions
         text_content = _get_text_content(verification_code, name, email_type)
-        html_content = _get_html_content(verification_code, name, email_type)
+        html_content = await _get_html_content(verification_code, name, email_type)
         
         # Attach parts
         part1 = MIMEText(text_content, "plain")
@@ -129,10 +130,30 @@ The U-Finder Team
 """
 
 
-def _get_html_content(verification_code: str, name: str, email_type: str) -> str:
-    # NOTE: This html content is temporary, Front-end Team will re-design this page
+async def _get_html_content(verification_code: str, name: str, email_type: str) -> str:
+    """Get HTML email content from file templates with fallback."""
+    template_file_map = {
+        "signup": "verification-email.html",
+        "reset": "resetpassword-email.html",
+    }
+    template_name = template_file_map.get(email_type)
+    if template_name:
+        html_content = await _render_email_template(
+            template_name,
+            {
+                "name": name,
+                "verification_code": verification_code,
+            },
+        )
+        if html_content is not None:
+            return html_content
 
-    """Get HTML email content"""
+    # Keep inline HTML as fallback for unsupported types or missing template files.
+    return _get_fallback_html_content(verification_code, name, email_type)
+
+
+def _get_fallback_html_content(verification_code: str, name: str, email_type: str) -> str:
+    """Fallback HTML when template files are unavailable."""
     if email_type == "signup":
         title = "Welcome to U-Finder!"
         message = "Thank you for signing up. Please use the verification code below to complete your registration."
@@ -230,6 +251,31 @@ def _get_html_content(verification_code: str, name: str, email_type: str) -> str
 </body>
 </html>
 """
+
+
+async def _render_email_template(template_name: str, context: dict[str, str]) -> Optional[str]:
+    """Load an HTML template file and replace known placeholders."""
+    template_dir = Path(__file__).resolve().parents[1] / "templates" / "emails"
+    template_path = template_dir / template_name
+
+    if not template_path.exists():
+        logger.warning(f"Email template not found: {template_path}")
+        return None
+
+    try:
+        async with aiofiles.open(template_path, "r", encoding="utf-8") as f:
+            template_content = await f.read()
+    except Exception as e:
+        logger.error(f"Failed to read email template {template_path}: {str(e)}")
+        return None
+
+    rendered = template_content
+    for key, value in context.items():
+        safe_value = escape(value, quote=True)
+        rendered = rendered.replace(f"{{{{{key}}}}}", safe_value)
+        rendered = rendered.replace(f"{{{{ {key} }}}}", safe_value)
+
+    return rendered
 
 
 async def _save_email_to_file(

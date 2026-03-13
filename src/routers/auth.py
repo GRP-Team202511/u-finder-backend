@@ -739,7 +739,7 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     email_sent = await send_verification_email(
         to_email=email,
         verification_code=reset_code,
-        name=email.split('@')[0],  # Use email prefix as name
+        name=user.user_name,
         email_type="reset"
     )
     
@@ -896,7 +896,7 @@ async def resend_reset_code(
     email_sent = await send_verification_email(
         to_email=user.email,
         verification_code=reset_code,
-        name=user.email.split("@")[0],
+        name=user.user_name,
         email_type="reset",
     )
 
