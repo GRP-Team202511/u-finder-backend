@@ -25,6 +25,7 @@ async def stream_dify_chat(
     query: str,
     user: str,
     conversation_id: Optional[str] = None,
+    user_profile_json: str = "",
 ) -> AsyncGenerator[str, None]:
     """
     Call Dify ``POST /v1/chat-messages`` in streaming mode and yield each
@@ -32,10 +33,12 @@ async def stream_dify_chat(
     proxy them to the frontend.
 
     Args:
-        query:            The user's question text.
-        user:             A stable user identifier (e.g. str(user_id)).
-        conversation_id:  Existing Dify conversation UUID, or None / "" for
-                          the first message.
+        query:              The user's question text.
+        user:               A stable user identifier (e.g. str(user_id)).
+        conversation_id:    Existing Dify conversation UUID, or None / "" for
+                            the first message.
+        user_profile_json:  JSON-serialised user profile (education, test
+                            scores, etc.) so Dify can personalise responses.
 
     Yields:
         SSE frame strings in the form ``"data: {…}\\n\\n"`` ready to be
@@ -45,8 +48,14 @@ async def stream_dify_chat(
     chat_messages_url = f"{base_url}/chat-messages"
 
     is_first_turn = not conversation_id  # True when starting a new conversation
+    inputs: dict[str, str] = {
+        "is_first_turn": str(is_first_turn).lower(),
+    }
+    if user_profile_json:
+        inputs["user_profile"] = user_profile_json
+
     payload = {
-        "inputs": {"is_first_turn": str(is_first_turn).lower()},
+        "inputs": inputs,
         "query": query,
         "response_mode": "streaming",
         "conversation_id": conversation_id or "",
