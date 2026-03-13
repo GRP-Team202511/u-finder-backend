@@ -6,6 +6,8 @@ Endpoints implemented:
 - GET    /api/admin/dashboard/summary
 - GET    /api/admin/users
 - DELETE /api/admin/users/{user_id}
+- POST   /api/admin/users/{user_id}/block
+- POST   /api/admin/users/{user_id}/unblock
 """
 import re
 import shutil
@@ -346,7 +348,86 @@ async def delete_user(
         )
 
 
+# ── POST /api/admin/users/{user_id}/block ─────────────────────────────
+
+@router.post(
+    "/users/{userId}/block",
+    response_model=ActionResult,
+    responses={
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Not admin, or target is an admin account"},
+        404: {"description": "Requested resource does not exist"},
+    },
+    summary="Block user",
+)
+async def block_user(
+    userId: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sets account.is_blocked = true. Idempotent."""
+    target = await _get_target_non_admin(userId, db)
+
+    target.is_blocked = True
+    await db.commit()
+
+    logger.info("Admin %s blocked user %s", admin.user_id, userId)
+    return ActionResult(result="success")
+
+
+# ── POST /api/admin/users/{user_id}/unblock ───────────────────────────
+
+@router.post(
+    "/users/{userId}/unblock",
+    response_model=ActionResult,
+    responses={
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Not admin, or target is an admin account"},
+        404: {"description": "Requested resource does not exist"},
+    },
+    summary="Unblock user",
+)
+async def unblock_user(
+    userId: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sets account.is_blocked = false. Idempotent."""
+    target = await _get_target_non_admin(userId, db)
+
+    target.is_blocked = False
+    await db.commit()
+
+    logger.info("Admin %s unblocked user %s", admin.user_id, userId)
+    return ActionResult(result="success")
+
+
 # ── Private helpers ──────────────────────────────────────────────────
+
+async def _get_target_non_admin(user_id: int, db: AsyncSession) -> Account:
+    """
+    Fetch a user by ID; raise 404 if not found, 403 if the target is an
+    admin account.  Shared by block / unblock endpoints.
+    """
+    result = await db.execute(
+        select(Account).where(Account.user_id == user_id)
+    )
+    account = result.scalar_one_or_none()
+
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"},
+        )
+
+    if account.user_type == UserType.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot block/unblock an admin account"},
+        )
+
+    return account
+
 
 def _cleanup_avatar_files(user_id: int) -> None:
     """Remove the user's avatar directory from disk, if it exists."""
