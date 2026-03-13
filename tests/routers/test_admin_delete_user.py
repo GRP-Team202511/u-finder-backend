@@ -113,6 +113,25 @@ class TestDeleteUser:
         assert response.status_code == 403
         assert_message_response(response.json(), "Cannot delete your own account")
 
+    async def test_delete_admin_account_forbidden(self, client, mock_db):
+        """Admin tries to delete another admin account -> 403."""
+        admin = _make_admin_account(user_id=99)
+        target_admin = _make_admin_account(user_id=50, email="other_admin@example.com")
+
+        mock_db.execute.side_effect = [
+            _make_db_result(admin),          # require_admin: account lookup
+            _make_db_result(target_admin),   # delete_user: find target account
+        ]
+
+        response = await client.delete(
+            DELETE_URL.format(userId=50), headers=_admin_auth_header()
+        )
+
+        assert response.status_code == 403
+        assert_message_response(response.json(), "Cannot delete an admin account")
+
+        mock_db.delete.assert_not_called()
+
     @patch("src.routers.admin._cleanup_avatar_files")
     async def test_delete_user_not_found(self, mock_cleanup, client, mock_db):
         """Admin deletes non-existent user -> 404."""
