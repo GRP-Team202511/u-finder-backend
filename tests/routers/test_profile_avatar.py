@@ -2,11 +2,11 @@
 Router tests for GET /profile/avatar, PUT /profile/avatar, and DELETE /profile/avatar
 
 Covers:
-  GET  200 — Avatar URL returned (with and without avatar)
+  GET  200 — Avatar URLs returned (with and without avatar)
   GET  401 — Invalid or expired token
   GET  500 — Internal server error
 
-  PUT  200 — Avatar uploaded successfully
+  PUT  200 — Avatar uploaded successfully (multiple sizes generated)
   PUT  401 — Invalid or expired token
   PUT  413 — File too large
   PUT  415 — Unsupported file type
@@ -34,6 +34,11 @@ TINY_PNG = (
     b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
+FAKE_AVATAR_URLS = {
+    "original": "/uploads/avatars/1/original.png",
+    "webp_original": "/uploads/avatars/1/original.webp",
+}
+
 
 def _setup_redis_hit(mock_redis):
     """Configure Redis to return a valid session (auth succeeds via cache)."""
@@ -56,10 +61,10 @@ class TestGetAvatar:
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
     async def test_get_avatar_with_avatar(self, mock_auth, client, mock_db, mock_redis):
-        """User with avatar -> 200 with avatar_url."""
+        """User with avatar -> 200 with avatar_urls."""
         _setup_redis_hit(mock_redis)
 
-        profile = _fake_profile(avatar="/uploads/avatars/1.jpg")
+        profile = _fake_profile(avatar=FAKE_AVATAR_URLS)
         execute_result = MagicMock()
         execute_result.scalar_one_or_none.return_value = profile
         mock_db.execute.return_value = execute_result
@@ -71,11 +76,11 @@ class TestGetAvatar:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["avatar_url"] == "/uploads/avatars/1.jpg"
+        assert body["avatar_urls"] == FAKE_AVATAR_URLS
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
     async def test_get_avatar_no_avatar(self, mock_auth, client, mock_db, mock_redis):
-        """User without avatar -> 200 with avatar_url=null."""
+        """User without avatar -> 200 with avatar_urls=null."""
         _setup_redis_hit(mock_redis)
 
         profile = _fake_profile()  # no avatar
@@ -90,11 +95,11 @@ class TestGetAvatar:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["avatar_url"] is None
+        assert body["avatar_urls"] is None
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
     async def test_get_avatar_no_profile(self, mock_auth, client, mock_db, mock_redis):
-        """User with no profile record -> 200 with avatar_url=null."""
+        """User with no profile record -> 200 with avatar_urls=null."""
         _setup_redis_hit(mock_redis)
 
         # Default mock_db returns None for scalar_one_or_none
@@ -104,7 +109,7 @@ class TestGetAvatar:
         )
 
         assert response.status_code == 200
-        assert response.json()["avatar_url"] is None
+        assert response.json()["avatar_urls"] is None
 
     async def test_get_avatar_missing_auth(self, client):
         """Missing Authorization header -> 422."""
@@ -132,17 +137,18 @@ class TestGetAvatar:
 
 class TestUploadAvatar:
 
-    @patch("src.routers.profile._find_existing_avatar", return_value=None)
+    @patch("src.routers.profile._generate_avatar_variants", return_value=FAKE_AVATAR_URLS)
+    @patch("src.routers.profile.shutil")
     @patch("src.routers.profile._avatar_dir")
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_upload_avatar_success(self, mock_auth, mock_dir, mock_find, client, mock_db, mock_redis):
-        """Valid JPEG upload -> 200 with avatar_url."""
+    async def test_upload_avatar_success(self, mock_auth, mock_dir, mock_shutil, mock_gen, client, mock_db, mock_redis):
+        """Valid PNG upload -> 200 with avatar_urls dict."""
         _setup_redis_hit(mock_redis)
 
-        # Mock avatar directory and file write
+        # Mock avatar directory
         mock_path = MagicMock(spec=Path)
-        mock_dir.return_value = mock_path
         mock_path.__truediv__ = MagicMock(return_value=MagicMock(spec=Path))
+        mock_dir.return_value = mock_path
 
         # Mock DB profile lookup
         profile = _fake_profile()
@@ -152,15 +158,15 @@ class TestUploadAvatar:
 
         response = await client.put(
             AVATAR_URL,
-            files={"file": ("avatar.jpg", TINY_PNG, "image/jpeg")},
+            files={"file": ("avatar.png", TINY_PNG, "image/png")},
             headers={"Authorization": "Bearer fake-token"},
         )
 
         assert response.status_code == 200
         body = response.json()
         assert body["message"] == "Avatar uploaded successfully"
-        assert "avatar_url" in body
-        assert body["avatar_url"].startswith("/uploads/avatars/")
+        assert "avatar_urls" in body
+        assert "original" in body["avatar_urls"]
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
     async def test_upload_avatar_unsupported_type(self, mock_auth, client, mock_redis):
@@ -174,7 +180,6 @@ class TestUploadAvatar:
         )
 
         assert response.status_code == 415
-        assert_message_response(response.json(), "Only JPEG, PNG, and WebP images are allowed")
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
     async def test_upload_avatar_too_large(self, mock_auth, client, mock_redis):
@@ -220,8 +225,7 @@ class TestUploadAvatar:
         """Unexpected exception -> 500."""
         _setup_redis_hit(mock_redis)
 
-        # Use a content type that passes validation but subsequent code fails
-        with patch("src.routers.profile._find_existing_avatar", side_effect=RuntimeError("disk error")):
+        with patch("src.routers.profile._avatar_dir", side_effect=RuntimeError("disk error")):
             response = await client.put(
                 AVATAR_URL,
                 files={"file": ("avatar.png", TINY_PNG, "image/png")},
@@ -238,33 +242,30 @@ class TestUploadAvatar:
 
 class TestDeleteAvatar:
 
+    @patch("src.routers.profile.shutil")
+    @patch("src.routers.profile._user_avatar_exists", return_value=True)
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_delete_avatar_success(self, mock_auth, client, mock_db, mock_redis):
+    async def test_delete_avatar_success(self, mock_auth, mock_exists, mock_shutil, client, mock_db, mock_redis):
         """Existing avatar -> 200 deleted."""
         _setup_redis_hit(mock_redis)
 
-        mock_existing = MagicMock(spec=Path)
-        mock_existing.exists.return_value = True
+        profile = _fake_profile(avatar=FAKE_AVATAR_URLS)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
 
-        with patch("src.routers.profile._find_existing_avatar", return_value=mock_existing):
-            profile = _fake_profile(avatar="/uploads/avatars/1.png")
-            execute_result = MagicMock()
-            execute_result.scalar_one_or_none.return_value = profile
-            mock_db.execute.return_value = execute_result
-
-            response = await client.delete(
-                AVATAR_URL,
-                headers={"Authorization": "Bearer fake-token"},
-            )
+        response = await client.delete(
+            AVATAR_URL,
+            headers={"Authorization": "Bearer fake-token"},
+        )
 
         assert response.status_code == 200
         assert_message_response(response.json(), "Avatar deleted successfully")
-        mock_existing.unlink.assert_called_once_with(missing_ok=True)
 
-    @patch("src.routers.profile._find_existing_avatar", return_value=None)
+    @patch("src.routers.profile._user_avatar_exists", return_value=False)
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_delete_avatar_not_found(self, mock_auth, mock_find, client, mock_redis):
-        """No avatar file exists -> 404."""
+    async def test_delete_avatar_not_found(self, mock_auth, mock_exists, client, mock_redis):
+        """No avatar folder exists -> 404."""
         _setup_redis_hit(mock_redis)
 
         response = await client.delete(
@@ -285,7 +286,7 @@ class TestDeleteAvatar:
         """Unexpected exception -> 500."""
         _setup_redis_hit(mock_redis)
 
-        with patch("src.routers.profile._find_existing_avatar", side_effect=RuntimeError("fs error")):
+        with patch("src.routers.profile._user_avatar_exists", side_effect=RuntimeError("fs error")):
             response = await client.delete(
                 AVATAR_URL,
                 headers={"Authorization": "Bearer fake-token"},

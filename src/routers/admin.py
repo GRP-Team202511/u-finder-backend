@@ -2,10 +2,13 @@
 Admin router module.
 
 Endpoints implemented:
-- POST /api/admin/auth/login
-- GET  /api/admin/dashboard/summary
+- POST   /api/admin/auth/login
+- GET    /api/admin/dashboard/summary
+- GET    /api/admin/users
+- DELETE /api/admin/users/{user_id}
 """
 import re
+import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -236,6 +239,113 @@ async def get_dashboard_summary(
     )
 
 
+# ── GET /api/admin/users ──────────────────────────────────────────────
+
+@router.get(
+    "/users",
+    response_model=List[AdminUser],
+    responses={
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Valid token but user is not admin"},
+        422: {"description": "Missing or invalid Authorization header"},
+    },
+    summary="List users",
+)
+async def list_users(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns a list of all user accounts for admin management."""
+    try:
+        result = await db.execute(select(Account).order_by(Account.user_id))
+        accounts = result.scalars().all()
+
+        users = []
+        for acc in accounts:
+            user_status = _map_status(acc)
+            users.append(
+                AdminUser(
+                    id=acc.user_id,
+                    name=acc.user_name,
+                    email=acc.email,
+                    type=str(acc.user_type),
+                    status=user_status,
+                    created_at=acc.created_at,
+                    available_actions=_available_actions(user_status),
+                )
+            )
+
+        return users
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error listing users: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ── DELETE /api/admin/users/{user_id} ─────────────────────────────────
+
+@router.delete(
+    "/users/{userId}",
+    response_model=ActionResult,
+    responses={
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Valid token but user is not admin, or attempting self-deletion"},
+        404: {"description": "Requested resource does not exist"},
+        422: {"description": "Missing or invalid Authorization header"},
+    },
+    summary="Delete user",
+)
+async def delete_user(
+    userId: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete a user account and all associated data."""
+    # Prevent self-deletion
+    if userId == admin.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot delete your own account"},
+        )
+
+    try:
+        result = await db.execute(
+            select(Account).where(Account.user_id == userId)
+        )
+        account = result.scalar_one_or_none()
+
+        if not account:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "User not found"},
+            )
+
+        # Delete account (cascades to profile, refresh_tokens, etc.)
+        await db.delete(account)
+        await db.commit()
+
+        # Delete avatar files from disk (after DB commit succeeds)
+        _cleanup_avatar_files(userId)
+
+        logger.info("Admin %s deleted user %s", admin.user_id, userId)
+        return ActionResult(result="success")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Error deleting user %s", userId)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
 # ── POST /api/admin/users/{userId}/block ───────────────────────────
 
 @router.post(
@@ -301,8 +411,13 @@ async def unblock_user(
     logger.info("Admin user_id=%s unblocked user_id=%s", admin.user_id, userId)
     return ActionResult(result="success")
 
-
 # ── Private helpers ──────────────────────────────────────────────────
+
+def _cleanup_avatar_files(user_id: int) -> None:
+    """Remove the user's avatar directory from disk, if it exists."""
+    avatar_dir = Path("uploads") / "avatars" / str(user_id)
+    if avatar_dir.is_dir():
+        shutil.rmtree(avatar_dir, ignore_errors=True)
 
 async def _get_llm_cost_today(db: AsyncSession, today: date) -> LlmCostToday:
     """SUM(total_price) from llm_usage_log where created_at::date = today."""
