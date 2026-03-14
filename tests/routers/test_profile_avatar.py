@@ -2,15 +2,17 @@
 Router tests for GET /profile/avatar, PUT /profile/avatar, and DELETE /profile/avatar
 
 Covers:
-  GET  200 — Avatar URLs returned (with and without avatar)
+  GET  200 — Avatar URL returned for requested size
+  GET  400 — Invalid or missing size parameter
   GET  401 — Invalid or expired token
+  GET  404 — User has no avatar or requested size not available
   GET  500 — Internal server error
 
   PUT  200 — Avatar uploaded successfully (multiple sizes generated)
+  PUT  400 — Empty file
   PUT  401 — Invalid or expired token
   PUT  413 — File too large
   PUT  415 — Unsupported file type
-  PUT  400 — Empty file
   PUT  500 — Internal server error
 
   DELETE 200 — Avatar deleted successfully
@@ -37,6 +39,8 @@ TINY_PNG = (
 FAKE_AVATAR_URLS = {
     "original": "/uploads/avatars/1/original.png",
     "webp_original": "/uploads/avatars/1/original.webp",
+    "webp_256": "/uploads/avatars/1/256.webp",
+    "webp_64": "/uploads/avatars/1/64.webp",
 }
 
 
@@ -60,8 +64,106 @@ def _fake_profile(avatar=None):
 class TestGetAvatar:
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_get_avatar_with_avatar(self, mock_auth, client, mock_db, mock_redis):
-        """User with avatar -> 200 with avatar_urls."""
+    async def test_get_avatar_origin(self, mock_auth, client, mock_db, mock_redis):
+        """User with avatar, size=origin -> 200 with url."""
+        _setup_redis_hit(mock_redis)
+
+        profile = _fake_profile(avatar=FAKE_AVATAR_URLS)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            params={"size": "origin"},
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["url"] == "/uploads/avatars/1/original.png"
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_64x64(self, mock_auth, client, mock_db, mock_redis):
+        """User with avatar, size=64x64 -> 200 with url."""
+        _setup_redis_hit(mock_redis)
+
+        profile = _fake_profile(avatar=FAKE_AVATAR_URLS)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            params={"size": "64x64"},
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["url"] == "/uploads/avatars/1/64.webp"
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_256x256(self, mock_auth, client, mock_db, mock_redis):
+        """User with avatar, size=256x256 -> 200 with url."""
+        _setup_redis_hit(mock_redis)
+
+        profile = _fake_profile(avatar=FAKE_AVATAR_URLS)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            params={"size": "256x256"},
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["url"] == "/uploads/avatars/1/256.webp"
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_no_avatar(self, mock_auth, client, mock_db, mock_redis):
+        """User without avatar -> 404."""
+        _setup_redis_hit(mock_redis)
+
+        profile = _fake_profile()  # no avatar
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            params={"size": "origin"},
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 404
+        assert_message_response(response.json(), "User has no avatar")
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_size_not_available(self, mock_auth, client, mock_db, mock_redis):
+        """User has avatar but requested size variant not generated (e.g. small image) -> 404."""
+        _setup_redis_hit(mock_redis)
+
+        # Avatar without webp_256 (e.g. 64x64 source image)
+        small_avatar = {"original": "/uploads/avatars/1/original.png", "webp_original": "/uploads/avatars/1/original.webp", "webp_64": "/uploads/avatars/1/64.webp"}
+        profile = _fake_profile(avatar=small_avatar)
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = execute_result
+
+        response = await client.get(
+            AVATAR_URL,
+            params={"size": "256x256"},
+            headers={"Authorization": "Bearer fake-token"},
+        )
+
+        assert response.status_code == 404
+        assert_message_response(response.json(), "Requested avatar size not available")
+
+    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_avatar_missing_size(self, mock_auth, client, mock_db, mock_redis):
+        """Missing size parameter -> 400."""
         _setup_redis_hit(mock_redis)
 
         profile = _fake_profile(avatar=FAKE_AVATAR_URLS)
@@ -74,46 +176,26 @@ class TestGetAvatar:
             headers={"Authorization": "Bearer fake-token"},
         )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["avatar_urls"] == FAKE_AVATAR_URLS
+        assert response.status_code == 400
+        assert "size" in response.json()["message"].lower()
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_get_avatar_no_avatar(self, mock_auth, client, mock_db, mock_redis):
-        """User without avatar -> 200 with avatar_urls=null."""
+    async def test_get_avatar_invalid_size(self, mock_auth, client, mock_db, mock_redis):
+        """Invalid size parameter -> 400."""
         _setup_redis_hit(mock_redis)
-
-        profile = _fake_profile()  # no avatar
-        execute_result = MagicMock()
-        execute_result.scalar_one_or_none.return_value = profile
-        mock_db.execute.return_value = execute_result
 
         response = await client.get(
             AVATAR_URL,
+            params={"size": "invalid"},
             headers={"Authorization": "Bearer fake-token"},
         )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert body["avatar_urls"] is None
-
-    @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
-    async def test_get_avatar_no_profile(self, mock_auth, client, mock_db, mock_redis):
-        """User with no profile record -> 200 with avatar_urls=null."""
-        _setup_redis_hit(mock_redis)
-
-        # Default mock_db returns None for scalar_one_or_none
-        response = await client.get(
-            AVATAR_URL,
-            headers={"Authorization": "Bearer fake-token"},
-        )
-
-        assert response.status_code == 200
-        assert response.json()["avatar_urls"] is None
+        assert response.status_code == 400
+        assert "size" in response.json()["message"].lower()
 
     async def test_get_avatar_missing_auth(self, client):
         """Missing Authorization header -> 422."""
-        response = await client.get(AVATAR_URL)
+        response = await client.get(AVATAR_URL, params={"size": "origin"})
         assert response.status_code == 422
 
     @patch("src.routers.profile._get_current_user_id", new_callable=AsyncMock, return_value=1)
@@ -124,6 +206,7 @@ class TestGetAvatar:
 
         response = await client.get(
             AVATAR_URL,
+            params={"size": "origin"},
             headers={"Authorization": "Bearer fake-token"},
         )
 
