@@ -166,8 +166,16 @@ class LikedUniversityListResponse(BaseModel):
 
 
 # ============ Avatar ============
+VALID_AVATAR_SIZES = ("origin", "64x64", "256x256")
+SIZE_TO_AVATAR_KEY = {
+    "origin": "original",
+    "64x64": "webp_64",
+    "256x256": "webp_256",
+}
+
+
 class GetAvatarResponse(BaseModel):
-    avatar_urls: Optional[dict] = None
+    url: Optional[str] = None
 
 
 class AvatarUploadResponse(BaseModel):

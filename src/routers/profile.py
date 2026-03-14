@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 import pillow_heif
-from fastapi import APIRouter, HTTPException, Header, status, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Header, status, Depends, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from redis.asyncio import Redis
@@ -39,6 +39,8 @@ from src.schemas.profile import (
     ErrorResponse,
     VALID_ARRAY_FIELDS,
     FIELD_DISPLAY_NAMES,
+    VALID_AVATAR_SIZES,
+    SIZE_TO_AVATAR_KEY,
 )
 from src.config.logger import get_logger
 from src.config.settings import get_settings
@@ -949,19 +951,28 @@ def _generate_avatar_variants(file_content: bytes, ext: str, user_id: int) -> di
     "/avatar",
     response_model=GetAvatarResponse,
     responses={
+        400: {"description": "Invalid or missing size parameter", "model": ErrorResponse},
         401: {"description": "Invalid or expired token", "model": ErrorResponse},
+        404: {"description": "User has no avatar", "model": ErrorResponse},
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
-    summary="Get Avatar URLs",
-    description="Returns avatar URLs at multiple sizes for the authenticated user. "
-                "If the user has no avatar, avatar_urls will be null.",
+    summary="Get Avatar URL",
+    description="Returns the avatar URL for the specified size. Requires refresh token and size parameter. "
+                "If the user has no avatar, returns 404.",
 )
 async def get_avatar(
+    size: Optional[str] = Query(None, description="Requested avatar size: origin, 64x64, 256x256"),
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
 ):
     try:
+        if not size or size not in VALID_AVATAR_SIZES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"message": "Invalid or missing size parameter. Use origin, 64x64, or 256x256."},
+            )
+
         user_id = await _get_current_user_id(authorization, db, redis)
 
         result = await db.execute(
@@ -973,7 +984,21 @@ async def get_avatar(
         if profile and profile.basic_info:
             avatar_urls = profile.basic_info.get("avatar")
 
-        return GetAvatarResponse(avatar_urls=avatar_urls)
+        if not avatar_urls:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "User has no avatar"},
+            )
+
+        avatar_key = SIZE_TO_AVATAR_KEY[size]
+        url = avatar_urls.get(avatar_key)
+        if not url:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Requested avatar size not available"},
+            )
+
+        return GetAvatarResponse(url=url)
 
     except HTTPException:
         raise
@@ -989,9 +1014,10 @@ async def get_avatar(
     "/avatar",
     response_model=AvatarUploadResponse,
     responses={
+        400: {"description": "Uploaded file is empty", "model": ErrorResponse},
         401: {"description": "Invalid or expired token", "model": ErrorResponse},
-        413: {"description": "File too large", "model": ErrorResponse},
-        415: {"description": "Unsupported file type", "model": ErrorResponse},
+        413: {"description": "File too large (exceeds 2 MB limit)", "model": ErrorResponse},
+        415: {"description": "Unsupported file type (only JPEG, PNG, WebP, HEIC, HEIF allowed)", "model": ErrorResponse},
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
     summary="Upload or Update Avatar",
