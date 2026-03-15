@@ -167,10 +167,11 @@ class LikedUniversityListResponse(BaseModel):
 
 # ============ Avatar ============
 VALID_AVATAR_SIZES = ("origin", "64x64", "256x256")
-SIZE_TO_AVATAR_KEY = {
-    "origin": "original",
-    "64x64": "webp_64",
-    "256x256": "webp_256",
+# Map size param to filename on disk (origin uses original.webp per scheme B)
+SIZE_TO_FILENAME = {
+    "origin": "original.webp",
+    "64x64": "64.webp",
+    "256x256": "256.webp",
 }
 
 
