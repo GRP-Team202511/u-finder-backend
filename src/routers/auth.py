@@ -30,6 +30,8 @@ from src.schemas.auth import (
     ConfirmResetPasswordRequest,
     ConfirmResetPasswordResponse,
     GetUserInfoResponse,
+    UpdateUsernameRequest,
+    UpdateUsernameResponse,
     DeviceSession,
     DevicesResponse,
     LogoutDeviceResponse,
@@ -1006,6 +1008,51 @@ async def get_user_info(
         name=user.user_name,
         user_type=user.user_type,
     )
+
+
+# ============ Update Username ============
+@router.put(
+    "/settings/username",
+    response_model=UpdateUsernameResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update username",
+    responses={
+        200: {"description": "Success", "model": UpdateUsernameResponse},
+        400: {"description": "Invalid request parameters (e.g. invalid format or length)", "model": ErrorResponse},
+        401: {"description": "Unauthorized or invalid/expired token", "model": ErrorResponse},
+        404: {"description": "User not found", "model": ErrorResponse},
+    },
+)
+async def update_username(
+    request: UpdateUsernameRequest,
+    authorization: str = Header(..., alias="Authorization"),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """
+    Update the username of the currently logged-in user (Account.user_name).
+    Note: This endpoint updates the account username, which is different from the profile name (basic_info.name).
+    Requires Bearer Token (refresh token) authentication. Username length: 1-20 characters.
+    """
+    user_id = await get_current_user_id(authorization, db, redis)
+
+    result = await db.execute(
+        select(Account).where(Account.user_id == user_id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        logger.error(f"Update username failed: User not found for user_id: {user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"},
+        )
+
+    user.user_name = request.username
+    await db.commit()
+
+    logger.info(f"Username updated for user_id: {user_id}")
+    return UpdateUsernameResponse(message="Username updated successfully")
 
 
 # ============ Logout All Devices ============
