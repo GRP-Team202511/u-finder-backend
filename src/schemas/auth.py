@@ -144,6 +144,15 @@ class DeleteVerifyResponse(BaseModel):
     message: str
 
 
+# ============ Update Username ============
+class UpdateUsernameRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=20, description="New username (display name)")
+
+
+class UpdateUsernameResponse(BaseModel):
+    message: str
+
+
 # ============ Get User Info ============
 class GetUserInfoResponse(BaseModel):
     email: str
