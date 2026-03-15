@@ -40,7 +40,7 @@ from src.schemas.profile import (
     VALID_ARRAY_FIELDS,
     FIELD_DISPLAY_NAMES,
     VALID_AVATAR_SIZES,
-    SIZE_TO_AVATAR_KEY,
+    SIZE_TO_FILENAME,
 )
 from src.config.logger import get_logger
 from src.config.settings import get_settings
@@ -957,8 +957,8 @@ def _generate_avatar_variants(file_content: bytes, ext: str, user_id: int) -> di
         500: {"description": "Internal server error", "model": ErrorResponse},
     },
     summary="Get Avatar URL",
-    description="Returns the avatar URL for the specified size. Requires refresh token and size parameter. "
-                "If the user has no avatar, returns 404.",
+    description="Returns the avatar URL for the specified size. Uses filesystem (no DB). "
+                "origin → original.webp, 64x64 → 64.webp, 256x256 → 256.webp. 404 if file not found.",
 )
 async def get_avatar(
     size: Optional[str] = Query(None, description="Requested avatar size: origin, 64x64, 256x256"),
@@ -975,29 +975,21 @@ async def get_avatar(
 
         user_id = await _get_current_user_id(authorization, db, redis)
 
-        result = await db.execute(
-            select(UserProfile).where(UserProfile.user_id == user_id)
-        )
-        profile = result.scalar_one_or_none()
+        # Scheme B: check filesystem, origin uses original.webp
+        filename = SIZE_TO_FILENAME[size]
+        user_dir = _avatar_dir() / str(user_id)
+        file_path = user_dir / filename
 
-        avatar_urls = None
-        if profile and profile.basic_info:
-            avatar_urls = profile.basic_info.get("avatar")
-
-        if not avatar_urls:
+        if not file_path.exists():
+            logger.info(
+                f"get_avatar 404: user_id={user_id} size={size} file={filename} not found on disk"
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": "User has no avatar"},
             )
 
-        avatar_key = SIZE_TO_AVATAR_KEY[size]
-        url = avatar_urls.get(avatar_key)
-        if not url:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "Requested avatar size not available"},
-            )
-
+        url = f"/uploads/avatars/{user_id}/{filename}"
         return GetAvatarResponse(url=url)
 
     except HTTPException:
@@ -1061,21 +1053,9 @@ async def upload_avatar(
         if old_dir.is_dir():
             shutil.rmtree(old_dir)
 
-        # Generate original + WebP variants
+        # Generate original + WebP variants (filesystem only, no DB)
         ext = AVATAR_EXTENSIONS[file.content_type]
         avatar_urls = _generate_avatar_variants(file_content, ext, user_id)
-
-        # Update basic_info.avatar in user profile
-        result = await db.execute(
-            select(UserProfile).where(UserProfile.user_id == user_id)
-        )
-        profile = result.scalar_one_or_none()
-
-        if profile:
-            basic_info = profile.basic_info or {}
-            basic_info["avatar"] = avatar_urls
-            profile.basic_info = basic_info
-            await db.commit()
 
         logger.info(f"Avatar uploaded for user_id={user_id}")
         return AvatarUploadResponse(message="Avatar uploaded successfully", avatar_urls=avatar_urls)
@@ -1116,17 +1096,6 @@ async def delete_avatar(
             )
 
         shutil.rmtree(_avatar_dir() / str(user_id))
-
-        # Clear avatar from basic_info
-        result = await db.execute(
-            select(UserProfile).where(UserProfile.user_id == user_id)
-        )
-        profile = result.scalar_one_or_none()
-        if profile and profile.basic_info:
-            basic_info = dict(profile.basic_info)
-            basic_info.pop("avatar", None)
-            profile.basic_info = basic_info
-            await db.commit()
 
         logger.info(f"Avatar deleted for user_id={user_id}")
         return AvatarDeleteResponse(message="Avatar deleted successfully")
