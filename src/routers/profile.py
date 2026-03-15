@@ -365,13 +365,13 @@ async def update_all_profile(
             profile = UserProfile(user_id=user_id)
             db.add(profile)
 
-        existing_basic_info = profile.basic_info or {}
-        existing_basic_info.update({
+        # Assign new dict so SQLAlchemy detects change (in-place mutation is not tracked)
+        profile.basic_info = {
+            **(profile.basic_info or {}),
             "name": request.personalInfo.name,
             "gender": request.personalInfo.gender,
             "birthday": request.personalInfo.birthday,
-        })
-        profile.basic_info = existing_basic_info
+        }
         profile.education = request.education.data
         profile.academic = request.academic.data
         profile.test = request.test.data
@@ -505,10 +505,8 @@ async def update_personal_info(
         }
 
         if profile:
-            # Merge with existing basic_info to preserve other fields if any
-            existing = profile.basic_info or {}
-            existing.update(new_basic_info)
-            profile.basic_info = existing
+            # Assign new dict so SQLAlchemy detects change (in-place mutation is not tracked)
+            profile.basic_info = {**(profile.basic_info or {}), **new_basic_info}
         else:
             profile = UserProfile(user_id=user_id, basic_info=new_basic_info)
             db.add(profile)
