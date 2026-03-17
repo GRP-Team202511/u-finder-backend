@@ -21,7 +21,6 @@ U-Finder 的后端子模块，一个基于大语言模型的大学选择辅助�
     - [开发](#开发)
     - [运行测试](#运行测试)
   - [项目结构](#项目结构)
-  - [API 概览](#api-概览)
   - [配置](#配置)
     - [环境变量](#环境变量)
   - [数据库模型](#数据库模型)
@@ -72,9 +71,8 @@ U-Finder 后端是一个基于 FastAPI 和 Python 3.12 构建的异步 RESTful A
 在开始之前，请确保已安装以下软件：
 
 - **Python**（v3.12 或更高版本）
-- **PostgreSQL**（v14 或更高版本）
-- **Redis**（v7 或更高版本）
 - **pip**（建议使用最新版本）
+- **Docker** 与 **Docker Compose** - 用于运行 PostgreSQL 和 Redis。请在 U-Finder 主仓库的 [`database/`](https://github.com/GRP-Team202511/u-finder/tree/main/database) 目录下执行 `docker compose up -d` 启动。
 
 ### 安装
 
@@ -82,7 +80,7 @@ U-Finder 后端是一个基于 FastAPI 和 Python 3.12 构建的异步 RESTful A
 
 ```bash
 git clone --recursive https://github.com/GRP-Team202511/u-finder
-cd backend
+cd u-finder/backend
 ```
 
 > 如果克隆时未使用 `--recursive`，请手动初始化子模块：
@@ -115,7 +113,13 @@ cp .env.example .env
 # 编辑 .env，填入数据库、Redis、Dify 和 SMTP 凭据
 ```
 
-5. 确保 PostgreSQL 和 Redis 已启动，然后初始化数据库：
+5. 通过 Docker Compose 启动 PostgreSQL 和 Redis（在 U-Finder 主仓库的 `database/` 目录下执行）：
+
+```bash
+cd ../database
+docker compose up -d
+cd ../backend
+```
 
 数据库表会在首次启动时通过 SQLAlchemy 的 `create_all()` 自动创建。
 
@@ -127,10 +131,7 @@ cp .env.example .env
 python run.py
 ```
 
-API 将在 `http://localhost:8000` 上可用。交互式 API 文档自动生成于：
-
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
+API 将在 `http://localhost:8000` 上可用。完整 API 文档请参阅 [Apifox](https://bop63bqzti.apifox.cn)。
 
 ### 运行测试
 
@@ -161,7 +162,7 @@ backend/
 │   ├── database/
 │   │   ├── connection.py        # 异步 SQLAlchemy 引擎与会话工厂
 │   │   ├── redis_connection.py  # 异步 Redis 客户端管理
-│   │   └── models.py            # ORM 模型（8 张表）
+│   │   └── models.py            # ORM 模型（9 张表）
 │   ├── routers/
 │   │   ├── auth.py              # 认证端点（注册、登录、重置等）
 │   │   ├── two_factor.py        # 2FA 端点（设置、确认、验证、禁用）
@@ -209,20 +210,6 @@ backend/
 ├── pytest.ini                   # pytest 配置
 └── .gitignore
 ```
-
-## API 概览
-
-所有端点均在 `/docs`（Swagger UI）自动生成文档。以下是概要：
-
-| 模块 | 前缀 | 主要端点 |
-|------|------|----------|
-| **认证** | `/auth` | `POST /login`, `POST /signup`, `POST /verify`, `POST /reset`, `POST /logout`, `GET /settings/info`, `GET /settings/devices`, `DELETE /delete` |
-| **2FA** | `/auth/2fa` | `POST /setup`, `POST /confirm`, `POST /verify`, `POST /disable`, `GET /status`, `POST /backup-codes/regenerate` |
-| **Passkey** | `/auth/passkey` | `POST /register/options`, `POST /register/verify`, `POST /login/options`, `POST /login/verify` |
-| **个人资料** | `/profile` | `GET /`, `PUT /`, `GET /personal`, `PUT /personal`, `GET /array/{field}`, `PUT /array/{field}`, `POST /cv`, `GET /avatar`, `PUT /avatar`, `DELETE /avatar` |
-| **收藏大学** | `/profile` | `POST /liked-university/check`, `POST /liked-university/{id}`, `DELETE /liked-university/{id}`, `GET /liked-university` |
-| **聊天** | `/chat` | `POST /{conversation_id}`（SSE）, `POST /{task_id}/stop`, `GET /messages`, `GET /conversations`, `POST /messages/{id}/feedbacks`, `DELETE /conversations/{id}`, `POST /conversations/{id}/name` |
-| **管理员** | `/api/admin` | `POST /auth/login`, `GET /dashboard/summary`, `GET /users`, `DELETE /users/{id}`, `POST /users/{id}/block`, `POST /users/{id}/unblock` |
 
 ## 配置
 
@@ -272,7 +259,7 @@ WEBAUTHN_ORIGIN=http://localhost:3000
 
 ## 数据库模型
 
-后端使用 8 张 PostgreSQL 表：
+后端使用 9 张 PostgreSQL 表：
 
 | 表名 | 用途 |
 |------|------|

@@ -21,7 +21,6 @@ The backend submodule for U-Finder, an LLM-based university finder system design
     - [Development](#development)
     - [Running Tests](#running-tests)
   - [Project Structure](#project-structure)
-  - [API Overview](#api-overview)
   - [Configuration](#configuration)
     - [Environment Variables](#environment-variables)
   - [Database Schema](#database-schema)
@@ -72,9 +71,8 @@ U-Finder Backend is an async RESTful API server built with FastAPI and Python 3.
 Before you begin, ensure you have the following installed:
 
 - **Python** (v3.12 or higher)
-- **PostgreSQL** (v14 or higher)
-- **Redis** (v7 or higher)
 - **pip** (latest version recommended)
+- **Docker** & **Docker Compose** - For PostgreSQL and Redis. Run them from the [`database/`](https://github.com/GRP-Team202511/u-finder/tree/main/database) directory in the main U-Finder repo.
 
 ### Installation
 
@@ -82,7 +80,7 @@ Before you begin, ensure you have the following installed:
 
 ```bash
 git clone --recursive https://github.com/GRP-Team202511/u-finder
-cd backend
+cd u-finder/backend
 ```
 
 > If you have already cloned without `--recursive`, initialise the submodules manually:
@@ -115,7 +113,13 @@ cp .env.example .env
 # Edit .env with your database, Redis, Dify, and SMTP credentials
 ```
 
-5. Ensure PostgreSQL and Redis are running, then initialise the database:
+5. Start PostgreSQL and Redis via Docker Compose (from the `database/` directory in the main U-Finder repo):
+
+```bash
+cd ../database
+docker compose up -d
+cd ../backend
+```
 
 The database tables are created automatically on first startup via SQLAlchemy's `create_all()`.
 
@@ -127,10 +131,7 @@ Start the development server:
 python run.py
 ```
 
-The API will be available at `http://localhost:8000`. Interactive API documentation is auto-generated at:
-
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
+The API will be available at `http://localhost:8000`. For full API documentation, see the [Apifox](https://bop63bqzti.apifox.cn).
 
 ### Running Tests
 
@@ -161,7 +162,7 @@ backend/
 │   ├── database/
 │   │   ├── connection.py        # Async SQLAlchemy engine & session factory
 │   │   ├── redis_connection.py  # Async Redis client management
-│   │   └── models.py            # ORM models (8 tables)
+│   │   └── models.py            # ORM models (9 tables)
 │   ├── routers/
 │   │   ├── auth.py              # Authentication endpoints (signup, login, reset, etc.)
 │   │   ├── two_factor.py        # 2FA endpoints (setup, confirm, verify, disable)
@@ -209,20 +210,6 @@ backend/
 ├── pytest.ini                   # pytest configuration
 └── .gitignore
 ```
-
-## API Overview
-
-All endpoints are auto-documented at `/docs` (Swagger UI). Below is a summary:
-
-| Module | Prefix | Key Endpoints |
-|--------|--------|---------------|
-| **Auth** | `/auth` | `POST /login`, `POST /signup`, `POST /verify`, `POST /reset`, `POST /logout`, `GET /settings/info`, `GET /settings/devices`, `DELETE /delete` |
-| **2FA** | `/auth/2fa` | `POST /setup`, `POST /confirm`, `POST /verify`, `POST /disable`, `GET /status`, `POST /backup-codes/regenerate` |
-| **Passkey** | `/auth/passkey` | `POST /register/options`, `POST /register/verify`, `POST /login/options`, `POST /login/verify` |
-| **Profile** | `/profile` | `GET /`, `PUT /`, `GET /personal`, `PUT /personal`, `GET /array/{field}`, `PUT /array/{field}`, `POST /cv`, `GET /avatar`, `PUT /avatar`, `DELETE /avatar` |
-| **Liked University** | `/profile` | `POST /liked-university/check`, `POST /liked-university/{id}`, `DELETE /liked-university/{id}`, `GET /liked-university` |
-| **Chat** | `/chat` | `POST /{conversation_id}` (SSE), `POST /{task_id}/stop`, `GET /messages`, `GET /conversations`, `POST /messages/{id}/feedbacks`, `DELETE /conversations/{id}`, `POST /conversations/{id}/name` |
-| **Admin** | `/api/admin` | `POST /auth/login`, `GET /dashboard/summary`, `GET /users`, `DELETE /users/{id}`, `POST /users/{id}/block`, `POST /users/{id}/unblock` |
 
 ## Configuration
 
@@ -272,7 +259,7 @@ See [`.env.example`](.env.example) for the complete list with documentation.
 
 ## Database Schema
 
-The backend uses 8 PostgreSQL tables:
+The backend uses 9 PostgreSQL tables:
 
 | Table | Purpose |
 |-------|---------|
