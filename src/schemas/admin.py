@@ -81,4 +81,5 @@ class AdminDashboardSummary(BaseModel):
     llm_cost_today: LlmCostToday
     recent_users: List[AdminUser]
     recent_logs: List[LogEntry]
+    logs_total_count: int = Field(0, description="Total matching log entries for pagination")
     model_cost_snapshot: ModelCostSnapshot

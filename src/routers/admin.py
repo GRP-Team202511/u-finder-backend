@@ -183,6 +183,8 @@ async def admin_login(
 async def get_dashboard_summary(
     logs_date: Optional[str] = Query(None, description="Date for logs preview (YYYY-MM-DD), defaults to today"),
     logs_level: Optional[str] = Query("all", regex="^(all|info|warn|error)$"),
+    logs_page: Optional[int] = Query(1, ge=1, description="Logs page number (1-based)"),
+    logs_per_page: Optional[int] = Query(10, ge=1, le=50, description="Logs per page (1-50)"),
     cost_model: Optional[str] = Query("chat", regex="^(chat|cv_parsing)$"),
     cost_time_range: Optional[str] = Query("last_24h", regex="^(last_24h|last_7d|last_1m)$"),
     admin: Account = Depends(require_admin),
@@ -222,7 +224,12 @@ async def get_dashboard_summary(
     recent_users = await _get_recent_users(db, limit=3)
 
     # ── System Logs Preview ─────────────────────────────────────────────
-    recent_logs = _get_logs_preview(parsed_logs_date, logs_level or "all")
+    recent_logs, logs_total_count = _get_logs_preview(
+        parsed_logs_date,
+        logs_level or "all",
+        page=logs_page or 1,
+        per_page=logs_per_page or 10,
+    )
 
     # ── Model Cost Snapshot ─────────────────────────────────────────────
     model_cost_snapshot = await _get_model_cost_snapshot(
@@ -235,6 +242,7 @@ async def get_dashboard_summary(
         llm_cost_today=llm_cost_today,
         recent_users=recent_users,
         recent_logs=recent_logs,
+        logs_total_count=logs_total_count,
         model_cost_snapshot=model_cost_snapshot,
     )
 
@@ -486,22 +494,27 @@ def _available_actions(user_status: str) -> List[str]:
 def _get_logs_preview(
     target_date: date,
     level: str,
-) -> List[LogEntry]:
+    *,
+    page: int = 1,
+    per_page: int = 10,
+) -> tuple[List[LogEntry], int]:
     """
     Read log entries from the on-disk log file for the given date and
-    level filter.  Returns up to 5 most recent entries (newest first).
+    level filter.  Returns (paginated entries, total count).
+    Entries are newest-first; page is 1-based.
     """
-    entries = _parse_log_file(target_date, level, limit=5)
-    return entries
+    all_entries = _parse_log_file(target_date, level)
+    total = len(all_entries)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_entries = all_entries[start:end]
+    return page_entries, total
 
 
-def _parse_log_file(target_date: date, level: str, *, limit: int = 5) -> List[LogEntry]:
+def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
     """
-    Parse a single day's log file and return up to *limit* most recent
-    matching entries in newest-first order.
-
-    Reads from the end of the file to avoid scanning potentially large
-    logs when only a handful of recent entries are needed.
+    Parse a single day's log file and return all matching entries
+    in newest-first order.
     """
     log_file = LOG_DIR / f"app_{target_date.strftime('%Y%m%d')}.log"
     if not log_file.exists():
@@ -521,11 +534,7 @@ def _parse_log_file(target_date: date, level: str, *, limit: int = 5) -> List[Lo
         with open(log_file, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
 
-        # Iterate from the end so we can stop early once we have enough
         for raw_line in reversed(lines):
-            if len(entries) >= limit:
-                break
-
             m = _LOG_LINE_RE.match(raw_line.strip())
             if not m:
                 continue
@@ -544,7 +553,6 @@ def _parse_log_file(target_date: date, level: str, *, limit: int = 5) -> List[Lo
     except OSError:
         logger.warning("Failed to read log file: %s", log_file)
 
-    # entries were collected newest-first; return in that order
     return entries
 
 

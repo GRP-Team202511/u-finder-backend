@@ -166,7 +166,7 @@ class TestDashboardAuth:
 
 class TestDashboardSuccess:
     @patch("src.routers.admin._get_model_cost_snapshot", new_callable=AsyncMock, return_value=FAKE_MODEL_COST)
-    @patch("src.routers.admin._get_logs_preview", return_value=FAKE_LOG_ENTRIES)
+    @patch("src.routers.admin._get_logs_preview", return_value=(FAKE_LOG_ENTRIES, 1))
     @patch("src.routers.admin._get_recent_users", new_callable=AsyncMock, return_value=FAKE_RECENT_USERS)
     @patch("src.routers.admin._get_llm_cost_today", new_callable=AsyncMock, return_value=FAKE_LLM_COST)
     async def test_dashboard_default_params(
@@ -205,7 +205,7 @@ class TestDashboardSuccess:
         assert snap["estimated_cost"]["amount"] == 2.5
 
     @patch("src.routers.admin._get_model_cost_snapshot", new_callable=AsyncMock, return_value=FAKE_MODEL_COST)
-    @patch("src.routers.admin._get_logs_preview", return_value=[])
+    @patch("src.routers.admin._get_logs_preview", return_value=([], 0))
     @patch("src.routers.admin._get_recent_users", new_callable=AsyncMock, return_value=FAKE_RECENT_USERS)
     @patch("src.routers.admin._get_llm_cost_today", new_callable=AsyncMock, return_value=FAKE_LLM_COST)
     async def test_dashboard_with_custom_params(
@@ -231,14 +231,14 @@ class TestDashboardSuccess:
         assert_admin_dashboard_summary_200(body)
 
         # Verify helpers received the correct arguments
-        mock_logs.assert_called_once_with(date(2026, 3, 1), "error")
+        mock_logs.assert_called_once_with(date(2026, 3, 1), "error", page=1, per_page=10)
         mock_snapshot.assert_called_once()
         call_args = mock_snapshot.call_args
         assert call_args[1].get("model") or call_args[0][1] == "cv_parsing"
 
     @patch("src.routers.admin._get_model_cost_snapshot", new_callable=AsyncMock,
            return_value=ModelCostSnapshot(total_requests=0, avg_latency_seconds=None, tokens_total=0, estimated_cost=Money()))
-    @patch("src.routers.admin._get_logs_preview", return_value=[])
+    @patch("src.routers.admin._get_logs_preview", return_value=([], 0))
     @patch("src.routers.admin._get_recent_users", new_callable=AsyncMock, return_value=[])
     @patch("src.routers.admin._get_llm_cost_today", new_callable=AsyncMock,
            return_value=LlmCostToday(currency="USD", amount=0.0))
