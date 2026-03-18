@@ -95,3 +95,49 @@ async def test_workflow_05_profile_cv(integration_client: AsyncClient, real_db: 
         headers={"Authorization": f"Bearer {token}"}
     )
     assert res_unlike.status_code == 200
+
+    # 6. Manual Personal Info update
+    res_update_personal = await integration_client.put(
+        "/profile/personal",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": "New Edited Name",
+            "gender": "Female",
+            "birthday": "2000-01-01"
+        }
+    )
+    assert res_update_personal.status_code == 200
+    
+    # 7. Avatar Upload
+    # Generate a dummy small valid image for avatar testing
+    import io
+    from PIL import Image
+
+    dummy_image = io.BytesIO()
+    Image.new('RGB', (10, 10), color='red').save(dummy_image, format='PNG')
+    dummy_image_bytes = dummy_image.getvalue()
+    
+    res_avatar = await integration_client.put(
+        "/profile/avatar",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("avatar.png", dummy_image_bytes, "image/png")}
+    )
+    assert res_avatar.status_code == 200
+    
+    avatar_urls = res_avatar.json().get("avatar_urls", {})
+    assert "original" in avatar_urls
+    
+    # 8. Avatar Fetch
+    res_get_avatar = await integration_client.get(
+        "/profile/avatar?size=origin",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res_get_avatar.status_code == 200
+    assert res_get_avatar.json().get("url") is not None
+    
+    # 9. Avatar Delete
+    res_del_avatar = await integration_client.delete(
+        "/profile/avatar",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert res_del_avatar.status_code == 200
