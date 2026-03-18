@@ -74,7 +74,7 @@ async def save_session(
         # EXPIREGT only extends the TTL if the new value is greater than the
         # current remaining TTL, preventing indefinite resets on active users.
         pipe.sadd(index_key, digest)
-        pipe.expiregt(index_key, _INDEX_TTL_SECONDS)
+        pipe.expire(index_key, _INDEX_TTL_SECONDS, gt=True)
         await pipe.execute()
 
         logger.debug(f"Session saved to Redis for user_id={user_id}, ttl={ttl_seconds}s")
