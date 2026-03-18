@@ -1,19 +1,10 @@
 import sys
 import os
 import asyncio
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-os.environ["TOTP_ENCRYPTION_KEY"] = "n5lbJGQ1/ODh4HUNavgzf1GFIK9f/n1yTlPRGntIrsU="
-from src.config.settings import get_settings
-get_settings.cache_clear()
-get_settings()
-
-"""
-Integration test fixtures using real Database and Redis connections.
-These fixtures employ nested transactions to ensure rollback after each test,
-leaving the database entirely unpolluted. Redis uses a separate db index.
-"""
 import pytest
 import pytest_asyncio
 from typing import AsyncGenerator
@@ -26,6 +17,18 @@ from src.database.connection import get_db, Base
 from src.database.redis_connection import get_redis
 from src.config.settings import get_settings
 from src.routers import auth_router, profile_router, chat_router, two_factor_router, admin_router, passkey_router
+
+@pytest.fixture(autouse=True, scope="session")
+def _integration_env():
+    """
+    Ensure a deterministic environment and settings configuration for integration tests.
+    This fixture ensures TOTP_ENCRYPTION_KEY is securely populated to test environments.
+    """
+    os.environ["TOTP_ENCRYPTION_KEY"] = "n5lbJGQ1/ODh4HUNavgzf1GFIK9f/n1yTlPRGntIrsU="
+    get_settings.cache_clear()
+    get_settings()
+    yield
+    get_settings.cache_clear()
 
 settings = get_settings()
 

@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch
 from sqlalchemy import text
+from src.utils.password_utils import hash_token
 
 @pytest.mark.asyncio
 async def test_workflow_10_resend_verification(integration_client, real_db):
@@ -23,7 +24,10 @@ async def test_workflow_10_resend_verification(integration_client, real_db):
         initial_code = sent_codes[-1]
 
     # Bypass throttle limit
-    await real_db.execute(text("UPDATE temp_token SET created_at = NOW() - INTERVAL '2 minutes'"))
+    await real_db.execute(
+        text("UPDATE temp_token SET created_at = NOW() - INTERVAL '2 minutes' WHERE token_hashed = :th"),
+        {"th": hash_token(temp_token)}
+    )
     await real_db.commit()
 
     # 2. Resend verification code
@@ -65,7 +69,10 @@ async def test_workflow_10_resend_verification(integration_client, real_db):
         first_reset_code = sent_codes[-1]
 
     # Bypass throttle limit
-    await real_db.execute(text("UPDATE temp_token SET created_at = NOW() - INTERVAL '2 minutes'"))
+    await real_db.execute(
+        text("UPDATE temp_token SET created_at = NOW() - INTERVAL '2 minutes' WHERE token_hashed = :th"),
+        {"th": hash_token(reset_temp_token)}
+    )
     await real_db.commit()
 
     # 6. Resend reset code

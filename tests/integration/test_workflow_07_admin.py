@@ -5,7 +5,6 @@ import pytest
 from httpx import AsyncClient
 from unittest.mock import patch
 from sqlalchemy import text
-from src.database.models import Account
 
 @pytest.mark.asyncio
 async def test_workflow_07_admin_operations(integration_client: AsyncClient, real_db):
@@ -28,8 +27,7 @@ async def test_workflow_07_admin_operations(integration_client: AsyncClient, rea
             "email": "normal_user@example.com",
             "password": "Password123"
         })
-        ntoken = normal_login.json().get("token")
-        
+
         # Get normal_id from db
         res_db = await real_db.execute(text("SELECT user_id FROM account WHERE email = 'normal_user@example.com'"))
         normal_id = res_db.scalar()

@@ -30,7 +30,7 @@ async def test_workflow_11_user_blocking(integration_client, real_db):
         normal_id = normal_login.json()["id"]
 
     # 2. Normal user tries an endpoint
-    res_prof_before = await integration_client.get("/api/profile/personal", headers={"Authorization": f"Bearer {normal_token}"})
+    res_prof_before = await integration_client.get("/profile/personal", headers={"Authorization": f"Bearer {normal_token}"})
     # Might be 404 if profile doesn't exist, but won't be 401/403
     assert res_prof_before.status_code in [200, 404]
 
@@ -65,7 +65,7 @@ async def test_workflow_11_user_blocking(integration_client, real_db):
     assert res_block.status_code == 200
 
     # 5. Normal user tries endpoint -> Session is still valid, so profile might return 404 (doesn't exist)
-    res_prof_after = await integration_client.get("/api/profile/personal", headers={"Authorization": f"Bearer {normal_token}"})
+    res_prof_after = await integration_client.get("/profile/personal", headers={"Authorization": f"Bearer {normal_token}"})
     assert res_prof_after.status_code in [200, 404]
 
     # 6. Normal user tries to login -> should be 403 (blocked)
@@ -73,8 +73,7 @@ async def test_workflow_11_user_blocking(integration_client, real_db):
         "email": "blocked_user@example.com",
         "password": "Password123"
     })
-    print(normal_login_fail.status_code)
-    assert normal_login_fail.status_code == 403
+    assert normal_login_fail.status_code == 403, normal_login_fail.text
 
     # 7. Admin unblocks user
     res_unblock = await integration_client.post(
@@ -92,5 +91,5 @@ async def test_workflow_11_user_blocking(integration_client, real_db):
     new_normal_token = normal_login_again.json()["token"]
 
     # 9. Verify token gets access again
-    res_prof_final = await integration_client.get("/api/profile/personal", headers={"Authorization": f"Bearer {new_normal_token}"})
+    res_prof_final = await integration_client.get("/profile/personal", headers={"Authorization": f"Bearer {new_normal_token}"})
     assert res_prof_final.status_code in [200, 404]

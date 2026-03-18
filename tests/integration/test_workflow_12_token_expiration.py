@@ -37,7 +37,15 @@ async def test_workflow_12_token_expiration(integration_client, real_db, real_re
     
     # 4. Manually expire the refresh token in the database
     # Assuming token is stored in refresh_token table and we can expire it
-    await real_db.execute(text("UPDATE refresh_token SET expire_at = NOW() - INTERVAL '1 day'"))
+    result = await real_db.execute(
+        text("SELECT user_id FROM account WHERE email = :email"),
+        {"email": "expire_user@example.com"},
+    )
+    user_id = result.scalar()
+    await real_db.execute(
+        text("UPDATE refresh_token SET expire_at = NOW() - INTERVAL '1 day' WHERE user_id = :user_id"),
+        {"user_id": user_id},
+    )
     await real_db.commit()
     
     # Call cleanup job to wipe expired tokens
