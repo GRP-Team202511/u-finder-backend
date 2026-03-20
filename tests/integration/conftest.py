@@ -25,6 +25,7 @@ def _integration_env():
     This fixture ensures TOTP_ENCRYPTION_KEY is securely populated to test environments.
     """
     os.environ["TOTP_ENCRYPTION_KEY"] = "n5lbJGQ1/ODh4HUNavgzf1GFIK9f/n1yTlPRGntIrsU="
+    os.environ["DIFY_API_KEY"] = "testsuite_dify_api_key_mock_12345"
     get_settings.cache_clear()
     get_settings()
     yield
