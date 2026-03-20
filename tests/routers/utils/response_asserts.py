@@ -256,7 +256,7 @@ def assert_admin_dashboard_summary_200(payload: Dict[str, Any]) -> None:
     """
     _assert_fields(payload, [
         "total_users", "total_users_delta_week", "llm_cost_today",
-        "recent_users", "recent_logs", "model_cost_snapshot",
+        "recent_users", "recent_logs", "logs_total_count", "model_cost_snapshot",
     ])
     assert isinstance(payload["total_users"], int), "total_users must be an integer"
     assert payload["total_users_delta_week"] is None or isinstance(payload["total_users_delta_week"], int), \
@@ -274,8 +274,9 @@ def assert_admin_dashboard_summary_200(payload: Dict[str, Any]) -> None:
             assert key in user, f"recent_users item missing '{key}'"
         assert isinstance(user["available_actions"], list), "available_actions must be a list"
 
-    # recent_logs
+    # recent_logs + logs_total_count
     assert isinstance(payload["recent_logs"], list), "recent_logs must be a list"
+    assert isinstance(payload["logs_total_count"], int), "logs_total_count must be an integer"
     for log in payload["recent_logs"]:
         for key in ("time", "level", "message"):
             assert key in log, f"recent_logs item missing '{key}'"
