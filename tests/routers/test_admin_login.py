@@ -74,10 +74,33 @@ class TestAdminLogin:
         assert response.status_code == 401
         assert_message_response(response.json(), "Invalid email or password")
 
+    async def test_admin_login_returns_user_type(self, client, mock_db):
+        """Login response must include user_type field."""
+        admin = _make_admin()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = admin
+
+        response = await client.post(LOGIN_URL, json=VALID_PAYLOAD)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["user_type"] == UserType.ADMIN
+
+    async def test_super_admin_login_success(self, client, mock_db):
+        """Super admin credentials must return 200 with user_type=4."""
+        sa = _make_admin(user_type=UserType.SUPER_ADMIN)
+        mock_db.execute.return_value.scalar_one_or_none.return_value = sa
+
+        response = await client.post(LOGIN_URL, json=VALID_PAYLOAD)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert_admin_login_200(body)
+        assert body["user_type"] == UserType.SUPER_ADMIN
+
     async def test_admin_login_not_admin_user(self, client, mock_db):
-        """A non-admin user (user_type != ADMIN) must return 403."""
-        student = _make_admin(user_type=UserType.STUDENT)
-        mock_db.execute.return_value.scalar_one_or_none.return_value = student
+        """A non-admin user (user_type not in [3, 4]) must return 403."""
+        regular_user = _make_admin(user_type=UserType.USER)
+        mock_db.execute.return_value.scalar_one_or_none.return_value = regular_user
 
         response = await client.post(LOGIN_URL, json=VALID_PAYLOAD)
 

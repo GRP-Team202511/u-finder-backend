@@ -135,8 +135,8 @@ class TestDashboardAuth:
 
     async def test_non_admin_user(self, client, mock_db):
         """A non-admin user must return 403."""
-        student = _make_admin_account(user_type=UserType.STUDENT)
-        mock_db.execute.return_value.scalar_one_or_none.return_value = student
+        regular = _make_admin_account(user_type=UserType.USER)
+        mock_db.execute.return_value.scalar_one_or_none.return_value = regular
 
         response = await client.get(DASHBOARD_URL, headers=_admin_auth_header())
 

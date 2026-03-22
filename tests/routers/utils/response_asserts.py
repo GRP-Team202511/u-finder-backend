@@ -233,12 +233,13 @@ def assert_delete_conversation_200(payload: Dict[str, Any]) -> None:
 def assert_admin_login_200(payload: Dict[str, Any]) -> None:
     """
     Validates POST /api/admin/auth/login 200 response.
-    Expected schema: {id: int, name: str, token: str}
+    Expected schema: {id: int, name: str, token: str, user_type: int}
     """
-    _assert_fields(payload, ["id", "name", "token"])
+    _assert_fields(payload, ["id", "name", "token", "user_type"])
     assert isinstance(payload["id"], int), "id must be an integer"
     assert isinstance(payload["name"], str), "name must be a string"
     assert isinstance(payload["token"], str) and payload["token"], "token must be a non-empty string"
+    assert isinstance(payload["user_type"], int), "user_type must be an integer"
 
 
 def assert_admin_dashboard_summary_200(payload: Dict[str, Any]) -> None:
