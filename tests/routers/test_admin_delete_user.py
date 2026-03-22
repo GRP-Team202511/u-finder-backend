@@ -28,7 +28,7 @@ def _make_db_result(value):
     return result
 
 
-def _make_admin_account(
+def _make_account(
     *,
     user_id: int = 99,
     user_name: str = "Admin User",
@@ -37,7 +37,7 @@ def _make_admin_account(
     is_blocked: bool = False,
     email_verified: bool = True,
 ):
-    """Return a minimal mock Account for require_admin."""
+    """Return a minimal mock Account."""
     acc = MagicMock()
     acc.user_id = user_id
     acc.user_name = user_name
@@ -55,17 +55,17 @@ def _make_target_user(user_id: int = 5, user_name: str = "Target User"):
     acc.user_id = user_id
     acc.user_name = user_name
     acc.email = f"user{user_id}@test.com"
-    acc.user_type = UserType.STUDENT
+    acc.user_type = UserType.USER
     acc.is_blocked = False
     acc.email_verified = True
     acc.created_at = datetime(2026, 2, 15, tzinfo=timezone.utc)
     return acc
 
 
-def _admin_auth_header(user_id: int = 99) -> dict:
-    """Return a Bearer header carrying a real JWT for the given admin user."""
+def _auth_header(user_id: int = 99, user_type: int = UserType.ADMIN) -> dict:
+    """Return a Bearer header carrying a real JWT."""
     token = create_access_token(
-        data={"sub": str(user_id), "email": "admin@example.com", "user_type": UserType.ADMIN}
+        data={"sub": str(user_id), "email": "admin@example.com", "user_type": user_type}
     )
     return {"Authorization": f"Bearer {token}"}
 
@@ -76,80 +76,109 @@ class TestDeleteUser:
 
     @patch("src.routers.admin._cleanup_avatar_files")
     async def test_delete_user_success(self, mock_cleanup, client, mock_db):
-        """Admin deletes another user -> 200 with success result."""
-        admin = _make_admin_account()
+        """Admin deletes a regular user -> 200 with success result."""
+        admin = _make_account()
         target = _make_target_user(user_id=5)
 
         mock_db.execute.side_effect = [
-            _make_db_result(admin),   # require_admin: account lookup
-            _make_db_result(target),  # delete_user: find target account
+            _make_db_result(admin),
+            _make_db_result(target),
         ]
 
         response = await client.delete(
-            DELETE_URL.format(userId=5), headers=_admin_auth_header()
+            DELETE_URL.format(userId=5), headers=_auth_header()
         )
 
         assert response.status_code == 200
-        body = response.json()
-        assert body["result"] == "success"
-
-        # Verify db.delete and db.commit were called
+        assert response.json()["result"] == "success"
         mock_db.delete.assert_called_once_with(target)
         mock_db.commit.assert_called_once()
-
-        # Verify avatar cleanup was called
         mock_cleanup.assert_called_once_with(5)
 
     async def test_delete_user_self_deletion_forbidden(self, client, mock_db):
         """Admin tries to delete own account -> 403."""
-        admin = _make_admin_account(user_id=99)
-
+        admin = _make_account(user_id=99)
         mock_db.execute.return_value = _make_db_result(admin)
 
         response = await client.delete(
-            DELETE_URL.format(userId=99), headers=_admin_auth_header(user_id=99)
+            DELETE_URL.format(userId=99), headers=_auth_header(user_id=99)
         )
 
         assert response.status_code == 403
         assert_message_response(response.json(), "Cannot delete your own account")
 
-    async def test_delete_admin_account_forbidden(self, client, mock_db):
-        """Admin tries to delete another admin account -> 403."""
-        admin = _make_admin_account(user_id=99)
-        target_admin = _make_admin_account(user_id=50, email="other_admin@example.com")
+    async def test_admin_cannot_delete_admin(self, client, mock_db):
+        """Admin tries to delete another admin -> 403."""
+        admin = _make_account(user_id=99)
+        target_admin = _make_account(user_id=50, email="other_admin@example.com")
 
         mock_db.execute.side_effect = [
-            _make_db_result(admin),          # require_admin: account lookup
-            _make_db_result(target_admin),   # delete_user: find target account
+            _make_db_result(admin),
+            _make_db_result(target_admin),
         ]
 
         response = await client.delete(
-            DELETE_URL.format(userId=50), headers=_admin_auth_header()
+            DELETE_URL.format(userId=50), headers=_auth_header()
         )
 
         assert response.status_code == 403
         assert_message_response(response.json(), "Cannot delete an admin account")
+        mock_db.delete.assert_not_called()
 
+    @patch("src.routers.admin._cleanup_avatar_files")
+    async def test_super_admin_can_delete_admin(self, mock_cleanup, client, mock_db):
+        """Super admin can delete an admin account -> 200."""
+        sa = _make_account(user_id=1, user_type=UserType.SUPER_ADMIN)
+        target_admin = _make_account(user_id=50, email="admin2@example.com")
+
+        mock_db.execute.side_effect = [
+            _make_db_result(sa),
+            _make_db_result(target_admin),
+        ]
+
+        response = await client.delete(
+            DELETE_URL.format(userId=50),
+            headers=_auth_header(user_id=1, user_type=UserType.SUPER_ADMIN),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["result"] == "success"
+        mock_db.delete.assert_called_once_with(target_admin)
+
+    async def test_super_admin_cannot_delete_super_admin(self, client, mock_db):
+        """Super admin tries to delete another super admin -> 403."""
+        sa = _make_account(user_id=1, user_type=UserType.SUPER_ADMIN)
+        target_sa = _make_account(user_id=2, user_type=UserType.SUPER_ADMIN, email="sa2@example.com")
+
+        mock_db.execute.side_effect = [
+            _make_db_result(sa),
+            _make_db_result(target_sa),
+        ]
+
+        response = await client.delete(
+            DELETE_URL.format(userId=2),
+            headers=_auth_header(user_id=1, user_type=UserType.SUPER_ADMIN),
+        )
+
+        assert response.status_code == 403
+        assert_message_response(response.json(), "Cannot delete a super admin account")
         mock_db.delete.assert_not_called()
 
     @patch("src.routers.admin._cleanup_avatar_files")
     async def test_delete_user_not_found(self, mock_cleanup, client, mock_db):
         """Admin deletes non-existent user -> 404."""
-        admin = _make_admin_account()
-
+        admin = _make_account()
         mock_db.execute.side_effect = [
-            _make_db_result(admin),  # require_admin: account lookup
-            _make_db_result(None),   # delete_user: target not found
+            _make_db_result(admin),
+            _make_db_result(None),
         ]
 
         response = await client.delete(
-            DELETE_URL.format(userId=999), headers=_admin_auth_header()
+            DELETE_URL.format(userId=999), headers=_auth_header()
         )
 
         assert response.status_code == 404
         assert_message_response(response.json(), "User not found")
-
-        # Verify no deletion occurred
         mock_db.delete.assert_not_called()
         mock_cleanup.assert_not_called()
 
@@ -164,17 +193,16 @@ class TestDeleteUser:
             DELETE_URL.format(userId=5),
             headers={"Authorization": "Bearer invalid-token"},
         )
-
         assert response.status_code == 401
         assert_message_response(response.json(), "Invalid or expired token")
 
     async def test_delete_user_non_admin(self, client, mock_db):
-        """Valid token but user_type=1 (student) -> 403."""
-        student = _make_admin_account(user_type=UserType.STUDENT)
-        mock_db.execute.return_value = _make_db_result(student)
+        """Valid token but user_type=1 (user) -> 403."""
+        regular = _make_account(user_type=UserType.USER)
+        mock_db.execute.return_value = _make_db_result(regular)
 
         response = await client.delete(
-            DELETE_URL.format(userId=5), headers=_admin_auth_header()
+            DELETE_URL.format(userId=5), headers=_auth_header()
         )
 
         assert response.status_code == 403
@@ -185,7 +213,7 @@ class TestDeleteUser:
         mock_db.execute.return_value = _make_db_result(None)
 
         response = await client.delete(
-            DELETE_URL.format(userId=5), headers=_admin_auth_header()
+            DELETE_URL.format(userId=5), headers=_auth_header()
         )
 
         assert response.status_code == 401
@@ -194,7 +222,7 @@ class TestDeleteUser:
     @patch("src.routers.admin._cleanup_avatar_files")
     async def test_delete_user_response_fields(self, mock_cleanup, client, mock_db):
         """Verify response contains only the 'result' field."""
-        admin = _make_admin_account()
+        admin = _make_account()
         target = _make_target_user(user_id=10)
 
         mock_db.execute.side_effect = [
@@ -203,7 +231,7 @@ class TestDeleteUser:
         ]
 
         response = await client.delete(
-            DELETE_URL.format(userId=10), headers=_admin_auth_header()
+            DELETE_URL.format(userId=10), headers=_auth_header()
         )
 
         assert response.status_code == 200

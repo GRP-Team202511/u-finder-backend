@@ -102,24 +102,24 @@ class TestListUsers:
         assert isinstance(body, list)
         assert len(body) == 4
 
-        # Verify admin user
+        # Admin viewing itself (another admin) -> no actions
         assert body[0]["id"] == 99
         assert body[0]["name"] == "Admin User"
         assert body[0]["type"] == "3"
         assert body[0]["status"] == "active"
-        assert body[0]["available_actions"] == ["block", "delete"]
+        assert body[0]["available_actions"] == []
 
-        # Verify active user
+        # Active regular user
         assert body[1]["id"] == 2
         assert body[1]["status"] == "active"
         assert body[1]["available_actions"] == ["block", "delete"]
 
-        # Verify blocked user
+        # Blocked regular user
         assert body[2]["id"] == 3
         assert body[2]["status"] == "blocked"
         assert body[2]["available_actions"] == ["unblock", "delete"]
 
-        # Verify pending user (email not verified)
+        # Pending regular user (email not verified)
         assert body[3]["id"] == 4
         assert body[3]["status"] == "pending"
         assert body[3]["available_actions"] == ["block", "delete"]
@@ -154,9 +154,9 @@ class TestListUsers:
         assert_message_response(response.json(), "Invalid or expired token")
 
     async def test_list_users_non_admin_user(self, client, mock_db):
-        """Valid token but user_type=1 (student) -> 403."""
-        student = _make_admin_account(user_type=UserType.STUDENT)
-        mock_db.execute.return_value = _make_db_result(student)
+        """Valid token but user_type=1 (user) -> 403."""
+        regular = _make_admin_account(user_type=UserType.USER)
+        mock_db.execute.return_value = _make_db_result(regular)
 
         response = await client.get(GET_URL, headers=_admin_auth_header())
 

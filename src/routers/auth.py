@@ -356,7 +356,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     - **email**: User's email address
     - **password**: User's password
     
-    Note: New users are automatically assigned user_type=1 (student).
+    Note: New users are automatically assigned user_type=1 (user).
     
     Returns temp_token for email verification
     """
@@ -397,7 +397,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
             user_name=request.name,
             email=email,
             password_hashed=hash_password(request.password),
-            user_type=1,  # Default: student user type
+            user_type=UserType.USER,
             email_verified=False,
         )
         db.add(new_account)

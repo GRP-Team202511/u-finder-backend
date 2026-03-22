@@ -22,6 +22,7 @@ class AdminLoginResponse(BaseModel):
     id: int
     name: str
     token: str
+    user_type: int
 
 
 # ============ Shared ============
@@ -37,12 +38,16 @@ class AdminUser(BaseModel):
     id: int
     name: str
     email: str
-    type: str = Field(..., description="1 | 2 | 3 | 4")
+    type: str = Field(..., description="1=user | 2=pro_user | 3=admin | 4=super_admin")
     status: str = Field(..., description="active | pending | blocked")
     created_at: datetime
     available_actions: List[str] = Field(
-        ..., description="Subset of [block, unblock, delete]"
+        ..., description="Subset of [block, unblock, delete, promote, demote]"
     )
+
+
+class ChangeRoleRequest(BaseModel):
+    role: int = Field(..., description="Target user_type: 1=user, 2=pro_user, 3=admin")
 
 
 class LlmCostToday(BaseModel):

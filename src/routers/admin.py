@@ -6,6 +6,9 @@ Endpoints implemented:
 - GET    /api/admin/dashboard/summary
 - GET    /api/admin/users
 - DELETE /api/admin/users/{user_id}
+- POST   /api/admin/users/{userId}/block
+- POST   /api/admin/users/{userId}/unblock
+- PATCH  /api/admin/users/{userId}/role
 """
 import re
 import shutil
@@ -27,6 +30,7 @@ from src.schemas.admin import (
     AdminLoginRequest,
     AdminLoginResponse,
     AdminUser,
+    ChangeRoleRequest,
     LlmCostToday,
     LogEntry,
     ModelCostSnapshot,
@@ -61,7 +65,7 @@ async def require_admin(
 ) -> Account:
     """
     Dependency that validates a JWT Bearer token and ensures the caller
-    is an admin (user_type == 3) who is not blocked.
+    has admin-level access (user_type in [ADMIN, SUPER_ADMIN]) and is not blocked.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -101,7 +105,7 @@ async def require_admin(
             detail={"message": "Account is blocked"},
         )
 
-    if account.user_type != UserType.ADMIN:
+    if not UserType.is_admin_level(account.user_type):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"message": "Admin permission required"},
@@ -141,8 +145,8 @@ async def admin_login(
             detail={"message": "Invalid email or password"},
         )
 
-    # 2. Must be admin
-    if account.user_type != UserType.ADMIN:
+    # 2. Must be admin or super admin
+    if not UserType.is_admin_level(account.user_type):
         logger.warning("Admin login rejected: user_type=%s for %s", account.user_type, email)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -171,6 +175,7 @@ async def admin_login(
         id=account.user_id,
         name=account.user_name,
         token=token,
+        user_type=account.user_type,
     )
 
 
@@ -221,7 +226,7 @@ async def get_dashboard_summary(
     llm_cost_today = await _get_llm_cost_today(db, today)
 
     # ── Recent Users (3 newest) ─────────────────────────────────────────
-    recent_users = await _get_recent_users(db, limit=3)
+    recent_users = await _get_recent_users(db, caller_user_type=admin.user_type, limit=3)
 
     # ── System Logs Preview ─────────────────────────────────────────────
     recent_logs, logs_total_count = _get_logs_preview(
@@ -279,7 +284,9 @@ async def list_users(
                     type=str(acc.user_type),
                     status=user_status,
                     created_at=acc.created_at,
-                    available_actions=_available_actions(user_status),
+                    available_actions=_available_actions(
+                        user_status, acc.user_type, admin.user_type,
+                    ),
                 )
             )
 
@@ -333,7 +340,13 @@ async def delete_user(
                 detail={"message": "User not found"},
             )
 
-        if account.user_type == UserType.ADMIN:
+        if account.user_type == UserType.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Cannot delete a super admin account"},
+            )
+
+        if account.user_type == UserType.ADMIN and admin.user_type != UserType.SUPER_ADMIN:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"message": "Cannot delete an admin account"},
@@ -380,8 +393,13 @@ async def block_user(
             detail={"message": "Resource not found"},
         )
 
-    # Admin accounts cannot be blocked/unblocked by admin endpoints.
-    if target.user_type == UserType.ADMIN:
+    if target.user_type == UserType.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot block/unblock a super admin account"},
+        )
+
+    if target.user_type == UserType.ADMIN and admin.user_type != UserType.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"message": "Cannot block/unblock an admin account"},
@@ -413,8 +431,13 @@ async def unblock_user(
             detail={"message": "Resource not found"},
         )
 
-    # Admin accounts cannot be blocked/unblocked by admin endpoints.
-    if target.user_type == UserType.ADMIN:
+    if target.user_type == UserType.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot block/unblock a super admin account"},
+        )
+
+    if target.user_type == UserType.ADMIN and admin.user_type != UserType.SUPER_ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"message": "Cannot block/unblock an admin account"},
@@ -424,6 +447,73 @@ async def unblock_user(
     await db.commit()
     logger.info("Admin user_id=%s unblocked user_id=%s", admin.user_id, userId)
     return ActionResult(result="success")
+
+
+# ── PATCH /api/admin/users/{userId}/role ───────────────────────────
+
+@router.patch(
+    "/users/{userId}/role",
+    response_model=ActionResult,
+    responses={
+        400: {"description": "Invalid role value"},
+        401: {"description": "Missing, malformed, or expired Bearer token"},
+        403: {"description": "Not super admin, or attempting to change own/super admin role"},
+        404: {"description": "User not found"},
+    },
+    summary="Change user role",
+)
+async def change_user_role(
+    userId: int,
+    body: ChangeRoleRequest,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change the role (user_type) of a target user. Only super admins can call this."""
+    if admin.user_type != UserType.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Super admin permission required"},
+        )
+
+    if userId == admin.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot change your own role"},
+        )
+
+    if body.role not in UserType.assignable_roles():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Invalid role. Must be one of: 1 (user), 2 (pro_user), 3 (admin)"},
+        )
+
+    result = await db.execute(
+        select(Account).where(Account.user_id == userId)
+    )
+    target = result.scalar_one_or_none()
+
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "User not found"},
+        )
+
+    if target.user_type == UserType.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Cannot change the role of a super admin"},
+        )
+
+    old_role = target.user_type
+    target.user_type = body.role
+    await db.commit()
+
+    logger.info(
+        "Super admin user_id=%s changed user_id=%s role from %s to %s",
+        admin.user_id, userId, old_role, body.role,
+    )
+    return ActionResult(result="success")
+
 
 # ── Private helpers ──────────────────────────────────────────────────
 
@@ -448,7 +538,9 @@ async def _get_llm_cost_today(db: AsyncSession, today: date) -> LlmCostToday:
     return LlmCostToday(currency="USD", amount=round(amount, 4), budget_per_day=None)
 
 
-async def _get_recent_users(db: AsyncSession, limit: int = 3) -> List[AdminUser]:
+async def _get_recent_users(
+    db: AsyncSession, *, caller_user_type: int, limit: int = 3,
+) -> List[AdminUser]:
     """Return the N most recently created accounts."""
     result = await db.execute(
         select(Account).order_by(Account.created_at.desc()).limit(limit)
@@ -458,7 +550,7 @@ async def _get_recent_users(db: AsyncSession, limit: int = 3) -> List[AdminUser]
     users: List[AdminUser] = []
     for acc in accounts:
         user_status = _map_status(acc)
-        actions = _available_actions(user_status)
+        actions = _available_actions(user_status, acc.user_type, caller_user_type)
         users.append(
             AdminUser(
                 id=acc.user_id,
@@ -482,11 +574,26 @@ def _map_status(account: Account) -> str:
     return "active"
 
 
-def _available_actions(user_status: str) -> List[str]:
-    """Return available moderation actions based on current status."""
-    if user_status == "blocked":
-        return ["unblock", "delete"]
-    return ["block", "delete"]
+def _available_actions(
+    user_status: str,
+    target_user_type: int,
+    caller_user_type: int,
+) -> List[str]:
+    """Return available moderation actions based on target status/type and caller role."""
+    if target_user_type == UserType.SUPER_ADMIN:
+        return []
+
+    if target_user_type == UserType.ADMIN:
+        if caller_user_type != UserType.SUPER_ADMIN:
+            return []
+        actions = ["unblock", "delete", "demote"] if user_status == "blocked" else ["block", "delete", "demote"]
+        return actions
+
+    # Regular users (USER / PRO_USER)
+    base = ["unblock", "delete"] if user_status == "blocked" else ["block", "delete"]
+    if caller_user_type == UserType.SUPER_ADMIN:
+        base.append("promote")
+    return base
 
 
 # ── Logs helpers ─────────────────────────────────────────────────────
