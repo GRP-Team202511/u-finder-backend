@@ -42,7 +42,7 @@ services:
     container_name: u-finder-backend
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${SERVER_PORT:-8000}:8000"
+      - "127.0.0.1:${SERVER_PORT:-8000}:${SERVER_PORT:-8000}"
     env_file:
       - .env
     environment:
