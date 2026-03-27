@@ -115,4 +115,22 @@ jobs:
             export UFINDER_IMAGE="$IMAGE_REF"
             docker compose -f docker-compose.prod.yml pull backend
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
-            curl -fsS "$HEALTHCHECK_URL"
+
+            max_retries=15
+            wait_seconds=4
+            for attempt in $(seq 1 "$max_retries"); do
+              echo "Health check attempt ${attempt}/${max_retries}..."
+              if curl -fsS "$HEALTHCHECK_URL"; then
+                echo "Backend is healthy."
+                exit 0
+              fi
+              if [ "$attempt" -lt "$max_retries" ]; then
+                echo "Backend not ready yet, waiting ${wait_seconds}s..."
+                sleep "$wait_seconds"
+              fi
+            done
+
+            echo "Health check failed after ${max_retries} attempts."
+            docker compose -f docker-compose.prod.yml ps
+            docker compose -f docker-compose.prod.yml logs backend --tail=200
+            exit 1
