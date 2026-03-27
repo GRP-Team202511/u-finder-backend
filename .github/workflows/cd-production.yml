@@ -114,6 +114,8 @@ jobs:
             echo "$REGISTRY_PASSWORD" | docker login ghcr.io -u "$REGISTRY_USERNAME" --password-stdin
             export UFINDER_IMAGE="$IMAGE_REF"
             docker compose -f docker-compose.prod.yml pull backend
+            docker compose -f docker-compose.prod.yml stop backend || true
+            docker compose -f docker-compose.prod.yml rm -f backend || true
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
             max_retries=15
