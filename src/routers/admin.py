@@ -10,6 +10,7 @@ Endpoints implemented:
 - POST   /api/admin/users/{userId}/unblock
 - PATCH  /api/admin/users/{userId}/role
 """
+import io
 import json
 import re
 import shutil
@@ -17,7 +18,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from PIL import Image
+import pillow_heif
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, File, status
 from sqlalchemy import Numeric, func, select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -25,6 +28,7 @@ from user_agents import parse as parse_ua
 
 from src.config.constants import UserType, TokenType
 from src.config.logger import get_logger
+from src.config.settings import get_settings
 from src.database import get_db, get_redis, Account, TotpBackupCode, RefreshToken, TempToken
 from src.database.models import LlmUsageLog
 from src.utils.auth_deps import get_current_user_id
@@ -61,6 +65,13 @@ from src.schemas.auth import (
     LogoutDeviceResponse,
     ErrorResponse,
 )
+from src.schemas.profile import (
+    GetAvatarResponse,
+    AvatarUploadResponse,
+    AvatarDeleteResponse,
+    VALID_AVATAR_SIZES,
+    SIZE_TO_FILENAME,
+)
 from src.schemas.two_factor import (
     TwoFAStatusResponse,
     Setup2FAResponse,
@@ -76,6 +87,7 @@ from src.utils.password_utils import verify_password
 from src.utils.session_utils import save_session
 
 logger = get_logger(__name__)
+settings = get_settings()
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -85,6 +97,17 @@ LOG_DIR = Path("logs")
 # Redis key helpers for 2FA setup
 _2FA_SETUP_PREFIX = "2fa_setup:"
 _2FA_SETUP_TTL = 300  # 5 minutes
+
+# ── Avatar constants ─────────────────────────────────────────────
+AVATAR_SIZES = [256, 64]
+ALLOWED_AVATAR_CONTENT_TYPES = {
+    "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
+}
+AVATAR_EXTENSIONS = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/heic": ".heic", "image/heif": ".heif",
+}
+pillow_heif.register_heif_opener()
 
 # Regex for parsing a single log line produced by our RotatingFileHandler.
 # Format: "2026-03-10 17:34:32 - name - LEVEL - [file:line] - message"
@@ -1088,6 +1111,7 @@ async def admin_reset_resend(
 )
 async def admin_get_devices(
     authorization: str = Header(..., alias="Authorization"),
+    user_agent: Optional[str] = Header(None, alias="User-Agent"),
     admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
@@ -1105,6 +1129,23 @@ async def admin_get_devices(
             )
         )
         sessions = result.scalars().all()
+        
+        # Auto-create session if current token has no record (login before fix)
+        has_current = any(s.token_hashed == current_token_hashed for s in sessions)
+        if not has_current:
+            ua_str = (user_agent or "")[:100]
+            new_session = RefreshToken(
+                user_id=admin.user_id,
+                token_hashed=current_token_hashed,
+                user_agent=ua_str,
+                expire_at=datetime.now(timezone.utc) + timedelta(days=30),
+            )
+            db.add(new_session)
+            await db.commit()
+            await db.refresh(new_session)
+            if redis:
+                await save_session(redis, token=current_token, user_id=admin.user_id, user_agent=ua_str)
+            sessions = list(sessions) + [new_session]
         
         devices = []
         for s in sessions:
@@ -1353,6 +1394,172 @@ async def admin_regenerate_backup_codes(
     
     logger.info(f"Backup codes regenerated for admin user_id={admin.user_id}")
     return RegenerateBackupCodesResponse(backup_codes=new_codes)
+
+
+# ──────────────────────── Avatar Helpers ─────────────────────────────
+
+def _avatar_dir() -> Path:
+    """Return the avatar upload directory, creating it if needed."""
+    p = Path(settings.avatar_upload_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _user_avatar_dir(user_id: int) -> Path:
+    """Return the per-user avatar directory, creating it if needed."""
+    p = _avatar_dir() / str(user_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _user_avatar_exists(user_id: int) -> bool:
+    d = _avatar_dir() / str(user_id)
+    return d.is_dir() and any(d.iterdir())
+
+
+def _generate_avatar_variants(file_content: bytes, ext: str, user_id: int) -> dict:
+    """Save the original file and generate WebP variants at multiple sizes."""
+    user_dir = _user_avatar_dir(user_id)
+    url_prefix = f"/uploads/avatars/{user_id}"
+    avatar_urls = {}
+
+    # Save original
+    original_filename = f"original{ext}"
+    (user_dir / original_filename).write_bytes(file_content)
+    avatar_urls["original"] = f"{url_prefix}/{original_filename}"
+
+    # WebP conversion
+    img = Image.open(io.BytesIO(file_content))
+    img = img.convert("RGB")
+    width, height = img.size
+    min_dim = min(width, height)
+
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=85)
+    (user_dir / "original.webp").write_bytes(buf.getvalue())
+    avatar_urls["webp_original"] = f"{url_prefix}/original.webp"
+
+    for size in AVATAR_SIZES:
+        if min_dim > size:
+            resized = img.copy()
+            resized.thumbnail((size, size), Image.LANCZOS)
+            buf = io.BytesIO()
+            resized.save(buf, format="WEBP", quality=85)
+            (user_dir / f"{size}.webp").write_bytes(buf.getvalue())
+            avatar_urls[f"webp_{size}"] = f"{url_prefix}/{size}.webp"
+
+    return avatar_urls
+
+
+# ──────────────────────── GET /api/admin/auth/settings/avatar ────────
+
+@router.get(
+    "/auth/settings/avatar",
+    response_model=GetAvatarResponse,
+    summary="Get Admin Avatar URL",
+    responses={
+        400: {"description": "Invalid size parameter"},
+        401: {"description": "Invalid or expired token"},
+        404: {"description": "No avatar found"},
+    },
+)
+async def admin_get_avatar(
+    size: Optional[str] = Query("origin"),
+    admin: Account = Depends(require_admin),
+):
+    """Returns the avatar URL for the specified size."""
+    if size not in VALID_AVATAR_SIZES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Invalid size. Use origin, 64x64, or 256x256."},
+        )
+
+    filename = SIZE_TO_FILENAME[size]
+    file_path = _avatar_dir() / str(admin.user_id) / filename
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "No avatar found"},
+        )
+
+    return GetAvatarResponse(url=f"/uploads/avatars/{admin.user_id}/{filename}")
+
+
+# ──────────────────────── PUT /api/admin/auth/settings/avatar ────────
+
+@router.put(
+    "/auth/settings/avatar",
+    response_model=AvatarUploadResponse,
+    summary="Upload or Update Admin Avatar",
+    responses={
+        400: {"description": "Empty file"},
+        401: {"description": "Invalid or expired token"},
+        413: {"description": "File too large"},
+        415: {"description": "Unsupported file type"},
+    },
+)
+async def admin_upload_avatar(
+    file: UploadFile = File(...),
+    admin: Account = Depends(require_admin),
+):
+    """Upload an image file to set or replace the admin's avatar."""
+    if file.content_type not in ALLOWED_AVATAR_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"message": "Only JPEG, PNG, WebP, HEIC, and HEIF images are allowed"},
+        )
+
+    file_content = await file.read()
+
+    if len(file_content) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Uploaded file is empty"},
+        )
+
+    if len(file_content) > settings.avatar_max_file_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"message": f"File size exceeds {settings.avatar_max_file_size // (1024 * 1024)} MB limit"},
+        )
+
+    # Remove old avatar
+    old_dir = _avatar_dir() / str(admin.user_id)
+    if old_dir.is_dir():
+        shutil.rmtree(old_dir)
+
+    ext = AVATAR_EXTENSIONS[file.content_type]
+    avatar_urls = _generate_avatar_variants(file_content, ext, admin.user_id)
+
+    logger.info(f"Avatar uploaded for admin user_id={admin.user_id}")
+    return AvatarUploadResponse(message="Avatar uploaded successfully", avatar_urls=avatar_urls)
+
+
+# ──────────────────────── DELETE /api/admin/auth/settings/avatar ─────
+
+@router.delete(
+    "/auth/settings/avatar",
+    response_model=AvatarDeleteResponse,
+    summary="Delete Admin Avatar",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        404: {"description": "No avatar found"},
+    },
+)
+async def admin_delete_avatar(
+    admin: Account = Depends(require_admin),
+):
+    """Remove the admin's avatar."""
+    if not _user_avatar_exists(admin.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "No avatar found"},
+        )
+
+    shutil.rmtree(_avatar_dir() / str(admin.user_id))
+    logger.info(f"Avatar deleted for admin user_id={admin.user_id}")
+    return AvatarDeleteResponse(message="Avatar deleted successfully")
 
 
 # ── Logs helpers ─────────────────────────────────────────────────────
