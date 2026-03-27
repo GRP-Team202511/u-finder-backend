@@ -2,7 +2,7 @@ name: CD Staging
 
 on:
   push:
-    branches: [main, Feature/add-cd-pipeline]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
