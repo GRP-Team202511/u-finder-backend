@@ -1,9 +1,7 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
-    container_name: postgres15
+    container_name: ufinder-backend-postgres15
     restart: unless-stopped
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -22,7 +20,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: redis7
+    container_name: ufinder-backend-redis7
     restart: unless-stopped
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
@@ -39,7 +37,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: u-finder-backend
+    container_name: ufinder-backend-app
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SERVER_PORT:-8000}:${SERVER_PORT:-8000}"
