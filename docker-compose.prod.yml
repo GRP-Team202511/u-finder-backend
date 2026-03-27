@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:15
-    container_name: ufinder-backend-postgres15
     restart: unless-stopped
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -20,7 +19,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: ufinder-backend-redis7
     restart: unless-stopped
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
@@ -35,7 +33,6 @@ services:
 
   backend:
     image: ${UFINDER_IMAGE:?UFINDER_IMAGE must be set to a published image reference}
-    container_name: ufinder-backend-app
     restart: unless-stopped
     ports:
       - "127.0.0.1:${SERVER_PORT:-8000}:${SERVER_PORT:-8000}"
