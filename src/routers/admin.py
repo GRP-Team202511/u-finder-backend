@@ -10,20 +10,35 @@ Endpoints implemented:
 - POST   /api/admin/users/{userId}/unblock
 - PATCH  /api/admin/users/{userId}/role
 """
+import io
+import json
 import re
 import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import Numeric, func, select
+from PIL import Image
+import pillow_heif
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, File, status
+from sqlalchemy import Numeric, func, select, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
+from user_agents import parse as parse_ua
 
-from src.config.constants import UserType
+from src.config.constants import UserType, TokenType
 from src.config.logger import get_logger
-from src.database import get_db, Account
+from src.config.settings import get_settings
+from src.database import get_db, get_redis, Account, TotpBackupCode, RefreshToken, TempToken
 from src.database.models import LlmUsageLog
+from src.utils.auth_deps import get_current_user_id
+from src.utils.session_utils import delete_session_by_hash
+from src.utils import (
+    generate_verification_code, send_verification_email, decrypt_secret,
+    verify_totp_code, check_totp_replay, generate_backup_codes, create_temp_token,
+    generate_totp_secret, get_totp_uri, generate_qr_code_base64, encrypt_secret,
+    hash_password, hash_token,
+)
 from src.schemas.admin import (
     ActionResult,
     AdminDashboardSummary,
@@ -36,15 +51,63 @@ from src.schemas.admin import (
     ModelCostSnapshot,
     Money,
 )
+from src.schemas.auth import (
+    GetUserInfoResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
+    VerifyResetCodeRequest,
+    VerifyResetCodeResponse,
+    ResendResetCodeResponse,
+    ConfirmResetPasswordRequest,
+    ConfirmResetPasswordResponse,
+    DeviceSession,
+    DevicesResponse,
+    LogoutDeviceResponse,
+    ErrorResponse,
+)
+from src.schemas.profile import (
+    GetAvatarResponse,
+    AvatarUploadResponse,
+    AvatarDeleteResponse,
+    VALID_AVATAR_SIZES,
+    SIZE_TO_FILENAME,
+)
+from src.schemas.two_factor import (
+    TwoFAStatusResponse,
+    Setup2FAResponse,
+    Confirm2FARequest,
+    Confirm2FAResponse,
+    Disable2FARequest,
+    Disable2FAResponse,
+    RegenerateBackupCodesRequest,
+    RegenerateBackupCodesResponse,
+)
 from src.utils.jwt_utils import create_access_token, verify_token
 from src.utils.password_utils import verify_password
+from src.utils.session_utils import save_session
 
 logger = get_logger(__name__)
+settings = get_settings()
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 # Log directory (same as src/config/logger.py)
 LOG_DIR = Path("logs")
+
+# Redis key helpers for 2FA setup
+_2FA_SETUP_PREFIX = "2fa_setup:"
+_2FA_SETUP_TTL = 300  # 5 minutes
+
+# ── Avatar constants ─────────────────────────────────────────────
+AVATAR_SIZES = [256, 64]
+ALLOWED_AVATAR_CONTENT_TYPES = {
+    "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
+}
+AVATAR_EXTENSIONS = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/heic": ".heic", "image/heif": ".heif",
+}
+pillow_heif.register_heif_opener()
 
 # Regex for parsing a single log line produced by our RotatingFileHandler.
 # Format: "2026-03-10 17:34:32 - name - LEVEL - [file:line] - message"
@@ -126,7 +189,9 @@ async def require_admin(
 )
 async def admin_login(
     body: AdminLoginRequest,
+    user_agent: Optional[str] = Header(None, alias="User-Agent"),
     db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """Authenticate admin user and return a JWT access token."""
     email = body.email.lower()
@@ -169,6 +234,26 @@ async def admin_login(
             "user_type": account.user_type,
         }
     )
+
+    # 5. Create RefreshToken session for device management
+    ua_str = (user_agent or "")[:100]
+    refresh_record = RefreshToken(
+        user_id=account.user_id,
+        token_hashed=hash_token(token),
+        user_agent=ua_str,
+        expire_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    db.add(refresh_record)
+    await db.commit()
+
+    # Cache session in Redis
+    if redis:
+        await save_session(
+            redis,
+            token=token,
+            user_id=account.user_id,
+            user_agent=ua_str,
+        )
 
     logger.info("Admin login successful: user_id=%s", account.user_id)
     return AdminLoginResponse(
@@ -594,6 +679,887 @@ def _available_actions(
     if caller_user_type == UserType.SUPER_ADMIN:
         base.append("promote")
     return base
+
+
+# ── GET /api/admin/auth/2fa/status ──────────────────────────────────
+
+@router.get(
+    "/auth/2fa/status",
+    response_model=TwoFAStatusResponse,
+    summary="Get Admin 2FA Status",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+    },
+)
+async def get_admin_2fa_status(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get 2FA status for the current admin user."""
+    remaining = 0
+    if admin.is_2fa_enabled:
+        result = await db.execute(
+            select(func.count()).select_from(TotpBackupCode).where(
+                TotpBackupCode.user_id == admin.user_id,
+                TotpBackupCode.is_used == False,  # noqa: E712
+            )
+        )
+        remaining = result.scalar() or 0
+
+    return TwoFAStatusResponse(
+        is_2fa_enabled=admin.is_2fa_enabled,
+        backup_codes_remaining=remaining,
+    )
+
+
+# ── POST /api/admin/auth/2fa/setup ─────────────────────────────────
+
+@router.post(
+    "/auth/2fa/setup",
+    response_model=Setup2FAResponse,
+    summary="Setup Admin 2FA",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+        409: {"description": "2FA is already enabled"},
+    },
+)
+async def admin_setup_2fa(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Generate TOTP secret and QR code for the admin user."""
+    if admin.is_2fa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "2FA is already enabled"},
+        )
+
+    # Generate TOTP secret and backup codes
+    secret = generate_totp_secret()
+    backup_codes = generate_backup_codes()
+    totp_uri = get_totp_uri(secret, admin.email)
+    qr_base64 = generate_qr_code_base64(totp_uri)
+
+    # Store in Redis temporarily (5 min)
+    if redis is not None:
+        setup_key = f"{_2FA_SETUP_PREFIX}{admin.user_id}"
+        await redis.set(
+            setup_key,
+            json.dumps({"secret": secret, "backup_codes": backup_codes}),
+            ex=_2FA_SETUP_TTL,
+        )
+    else:
+        logger.warning("Redis unavailable — 2FA setup data cannot be cached")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": "Service temporarily unavailable, please try again later"},
+        )
+
+    logger.info(f"2FA setup initiated for admin user_id={admin.user_id}")
+
+    return Setup2FAResponse(
+        totp_uri=totp_uri,
+        qr_code_base64=qr_base64,
+        backup_codes=backup_codes,
+    )
+
+
+# ── POST /api/admin/auth/2fa/confirm ───────────────────────────────
+
+@router.post(
+    "/auth/2fa/confirm",
+    response_model=Confirm2FAResponse,
+    summary="Confirm Admin 2FA Binding",
+    responses={
+        400: {"description": "Invalid TOTP code or setup expired"},
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+        409: {"description": "2FA is already enabled"},
+    },
+)
+async def admin_confirm_2fa(
+    request: Confirm2FARequest,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Confirm 2FA binding with first TOTP code for admin user."""
+    if admin.is_2fa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "2FA is already enabled"},
+        )
+
+    # Retrieve pending setup from Redis
+    if redis is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": "Service temporarily unavailable"},
+        )
+
+    setup_key = f"{_2FA_SETUP_PREFIX}{admin.user_id}"
+    raw = await redis.get(setup_key)
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "2FA setup not found or expired, please call /auth/2fa/setup first"},
+        )
+
+    setup_data = json.loads(raw)
+    secret = setup_data["secret"]
+    backup_codes: list[str] = setup_data["backup_codes"]
+
+    # Verify the TOTP code
+    if not verify_totp_code(secret, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Invalid TOTP code"},
+        )
+
+    # Replay protection
+    if await check_totp_replay(redis, admin.user_id, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "TOTP code already used, please wait for a new code"},
+        )
+
+    # Persist: encrypt secret → Account, hash backup codes → TotpBackupCode
+    admin.totp_secret_encrypted = encrypt_secret(secret)
+    admin.is_2fa_enabled = True
+
+    for code in backup_codes:
+        db.add(TotpBackupCode(
+            user_id=admin.user_id,
+            code_hashed=hash_password(code),
+        ))
+
+    await db.commit()
+
+    # Clean up Redis
+    await redis.delete(setup_key)
+
+    logger.info(f"2FA enabled for admin user_id={admin.user_id}")
+    return Confirm2FAResponse(message="2FA enabled successfully")
+
+
+# ── GET /api/admin/auth/settings/info ───────────────────────────────
+
+@router.get(
+    "/auth/settings/info",
+    response_model=GetUserInfoResponse,
+    summary="Get Admin User Info",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+    },
+)
+async def get_admin_user_info(
+    admin: Account = Depends(require_admin),
+):
+    """Get user information for the current admin user."""
+    return GetUserInfoResponse(
+        email=admin.email,
+        name=admin.user_name,
+        user_type=admin.user_type,
+    )
+
+
+# ──────────── Helper functions for device management ──────────────
+
+def _format_browser(ua) -> str:
+    """Return '<family> <major>' or 'Unknown'."""
+    family = ua.browser.family
+    version = ua.browser.version_string
+    if not family or family == "Other":
+        return "Unknown"
+    major = version.split(".")[0] if version else ""
+    return f"{family} {major}".strip()
+
+
+def _format_os(ua) -> str:
+    """Return '<os_family> <os_version>' or 'Unknown'."""
+    family = ua.os.family
+    version = ua.os.version_string
+    if not family or family == "Other":
+        return "Unknown"
+    return f"{family} {version}".strip()
+
+
+def _parse_device_type(ua) -> str:
+    """Map user_agents flags to a device_type string."""
+    if ua.is_bot:
+        return "Bot"
+    if ua.is_tablet:
+        return "Tablet"
+    if ua.is_mobile:
+        return "Mobile"
+    if ua.is_pc:
+        return "PC"
+    return "Unknown"
+
+
+# ──────────────────────── POST /api/admin/auth/reset ────────────────
+
+@router.post(
+    "/auth/reset",
+    response_model=ResetPasswordResponse,
+    summary="Admin Password Reset Request",
+    responses={
+        404: {"description": "No account record for this email"},
+    },
+)
+async def admin_reset_password(
+    request: ResetPasswordRequest,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Request password reset for admin user using their email."""
+    logger.info(f"Admin password reset request for user_id: {admin.user_id}")
+    
+    # Generate temp token and reset code
+    temp_token = create_temp_token()
+    reset_code = generate_verification_code()
+    
+    # Create password reset record with hashed verification code
+    reset_record = TempToken(
+        user_id=admin.user_id,
+        token_hashed=hash_token(temp_token),
+        token_type=TokenType.PASSWORD_RESET,
+        verification_code_hashed=hash_password(reset_code),
+        expire_at=datetime.now(timezone.utc) + timedelta(minutes=5)
+    )
+    
+    db.add(reset_record)
+    await db.commit()
+    
+    # Send reset code via email
+    logger.info(f"Password reset temp token created for admin_user_id: {admin.user_id}")
+    email_sent = await send_verification_email(
+        to_email=admin.email,
+        verification_code=reset_code,
+        name=admin.user_name,
+        email_type="reset"
+    )
+    
+    if not email_sent:
+        logger.warning(f"Failed to send reset code email to {admin.email}, but reset record created")
+    
+    return ResetPasswordResponse(temp_token=temp_token)
+
+
+# ──────────────────────── POST /api/admin/auth/reset/verify ────────
+
+@router.post(
+    "/auth/reset/verify",
+    response_model=ConfirmResetPasswordResponse,
+    summary="Admin Password Reset Verification",
+    responses={
+        401: {"description": "Wrong code or expired token"},
+    },
+)
+async def admin_reset_verify(
+    request: ConfirmResetPasswordRequest,
+    temp_token: str = Header(..., alias="Temp-Token"),
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify password reset code and update admin password."""
+    logger.info(f"Admin password reset verification for user_id: {admin.user_id}")
+    
+    temp_token_hashed = hash_token(temp_token)
+    
+    # Check if temp token exists with correct type
+    result = await db.execute(
+        select(TempToken).where(
+            TempToken.token_hashed == temp_token_hashed,
+            TempToken.token_type == TokenType.PASSWORD_RESET,
+            TempToken.user_id == admin.user_id,
+        )
+    )
+    reset_record = result.scalar_one_or_none()
+    
+    if not reset_record:
+        logger.warning(f"Admin password reset failed: Invalid temp token for user_id={admin.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Check if expired
+    if datetime.now(timezone.utc) > reset_record.expire_at:
+        logger.warning(f"Admin password reset failed: Expired token for user_id={admin.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Verify code against stored hash
+    if not reset_record.verification_code_hashed or not verify_password(request.code, reset_record.verification_code_hashed):
+        logger.warning(f"Admin password reset failed: Invalid verification code for user_id={admin.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Update password
+    admin.password_hashed = hash_password(request.newPassword)
+    
+    # Delete temp token
+    await db.delete(reset_record)
+    await db.commit()
+    
+    logger.info(f"Admin password reset successful for user_id={admin.user_id}")
+    return ConfirmResetPasswordResponse(message="Password reset successfully")
+
+
+# ──────────────────────── POST /api/admin/auth/reset/resend ────────
+
+@router.post(
+    "/auth/reset/resend",
+    response_model=ResendResetCodeResponse,
+    summary="Admin Password Reset Resend Code",
+    responses={
+        401: {"description": "Token expired or invalid"},
+        429: {"description": "Too many requests"},
+    },
+)
+async def admin_reset_resend(
+    temp_token: str = Header(..., alias="Temp-Token"),
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resend password reset verification code to admin."""
+    logger.info(f"Admin resend reset code for user_id: {admin.user_id}")
+    
+    temp_token_hashed = hash_token(temp_token)
+    
+    # Check if temp token exists with correct type
+    result = await db.execute(
+        select(TempToken).where(
+            TempToken.token_hashed == temp_token_hashed,
+            TempToken.token_type == TokenType.PASSWORD_RESET,
+            TempToken.user_id == admin.user_id,
+        )
+    )
+    reset_record = result.scalar_one_or_none()
+    
+    if not reset_record:
+        logger.warning(f"Admin resend reset code failed: Invalid temp token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"}
+        )
+    
+    now = datetime.now(timezone.utc)
+    
+    # Check if expired
+    if now > reset_record.expire_at:
+        logger.warning(f"Admin resend reset code failed: Expired token")
+        await db.delete(reset_record)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"}
+        )
+    
+    # Rate limit: 60 seconds between resends
+    if reset_record.created_at:
+        retry_after = 60 - int((now - reset_record.created_at).total_seconds())
+        if retry_after > 0:
+            logger.warning(f"Admin resend reset code throttled")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many requests. Please wait before requesting again.",
+                    "retryAfter": retry_after,
+                }
+            )
+    
+    # Generate and send new reset code
+    reset_code = generate_verification_code()
+    email_sent = await send_verification_email(
+        to_email=admin.email,
+        verification_code=reset_code,
+        name=admin.user_name,
+        email_type="reset"
+    )
+    
+    if not email_sent:
+        logger.warning(f"Failed to resend reset code email to {admin.email}")
+    
+    # Update verification code hash
+    reset_record.verification_code_hashed = hash_password(reset_code)
+    await db.commit()
+    
+    logger.info(f"Admin reset code resent for user_id={admin.user_id}")
+    return ResendResetCodeResponse(message="Code resent successfully")
+
+
+# ──────────────────────── GET /api/admin/auth/settings/devices ────
+
+@router.get(
+    "/auth/settings/devices",
+    response_model=DevicesResponse,
+    summary="Get Admin Device Sessions",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def admin_get_devices(
+    authorization: str = Header(..., alias="Authorization"),
+    user_agent: Optional[str] = Header(None, alias="User-Agent"),
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Returns all active login sessions for the current admin user."""
+    try:
+        # Extract current token hash for is_current comparison
+        current_token = authorization.replace("Bearer ", "")
+        current_token_hashed = hash_token(current_token)
+        
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == admin.user_id,
+                RefreshToken.expire_at > datetime.now(timezone.utc),
+            )
+        )
+        sessions = result.scalars().all()
+        
+        # Auto-create session if current token has no record (login before fix)
+        has_current = any(s.token_hashed == current_token_hashed for s in sessions)
+        if not has_current:
+            ua_str = (user_agent or "")[:100]
+            new_session = RefreshToken(
+                user_id=admin.user_id,
+                token_hashed=current_token_hashed,
+                user_agent=ua_str,
+                expire_at=datetime.now(timezone.utc) + timedelta(days=30),
+            )
+            db.add(new_session)
+            await db.commit()
+            await db.refresh(new_session)
+            if redis:
+                await save_session(redis, token=current_token, user_id=admin.user_id, user_agent=ua_str)
+            sessions = list(sessions) + [new_session]
+        
+        devices = []
+        for s in sessions:
+            ua = parse_ua(s.user_agent or "")
+            devices.append(DeviceSession(
+                session_id=s.id,
+                browser=_format_browser(ua),
+                os=_format_os(ua),
+                device_type=_parse_device_type(ua),
+                created_at=s.created_at.isoformat() if s.created_at else "",
+                is_current=(s.token_hashed == current_token_hashed),
+            ))
+        
+        return DevicesResponse(devices=devices, total=len(devices))
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get admin devices error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ──────────────────────── DELETE /api/admin/auth/settings/devices/{sessionId} ───
+
+@router.delete(
+    "/auth/settings/devices/{session_id}",
+    response_model=LogoutDeviceResponse,
+    summary="Admin Logout Specific Device",
+    responses={
+        400: {"description": "Cannot logout current device"},
+        401: {"description": "Invalid or expired token"},
+        404: {"description": "Session not found"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def admin_logout_device(
+    session_id: int,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Logout a specific device by session_id."""
+    try:
+        # Look up the session, ensuring it belongs to the current admin
+        result = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.id == session_id,
+                RefreshToken.user_id == admin.user_id,
+            )
+        )
+        session = result.scalar_one_or_none()
+        
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Session not found"},
+            )
+        
+        token_hashed = session.token_hashed
+        
+        # Clean Redis cache BEFORE committing the DB delete
+        if redis:
+            await delete_session_by_hash(redis, token_hashed, admin.user_id)
+        
+        # Delete from DB
+        delete_result = await db.execute(
+            sa_delete(RefreshToken).where(
+                RefreshToken.id == session_id,
+                RefreshToken.user_id == admin.user_id,
+            )
+        )
+        if delete_result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"message": "Session not found"},
+            )
+        await db.commit()
+        
+        logger.info(f"Admin logout device session_id={session_id} for user_id={admin.user_id}")
+        return LogoutDeviceResponse(message="Device session has been logged out")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin logout device error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ──────────────────────── POST /api/admin/auth/settings/logout-all ──
+
+@router.post(
+    "/auth/settings/logout-all",
+    response_model=dict,
+    summary="Admin Logout All Devices",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        500: {"description": "Internal server error"},
+    },
+)
+async def admin_logout_all_devices(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Logout all device sessions for the current admin user."""
+    try:
+        # Fetch all sessions for this user
+        result = await db.execute(
+            select(RefreshToken).where(RefreshToken.user_id == admin.user_id)
+        )
+        sessions = result.scalars().all()
+        
+        revoked_count = len(sessions)
+        
+        # Delete all from Redis first
+        if redis:
+            for session in sessions:
+                await delete_session_by_hash(redis, session.token_hashed, admin.user_id)
+        
+        # Delete all from DB
+        delete_result = await db.execute(
+            sa_delete(RefreshToken).where(RefreshToken.user_id == admin.user_id)
+        )
+        await db.commit()
+        
+        logger.info(f"Admin logout all devices for user_id={admin.user_id}, revoked {revoked_count} sessions")
+        return {
+            "message": "All devices have been logged out",
+            "revoked_count": revoked_count
+        }
+    
+    except Exception as e:
+        logger.error(f"Admin logout all devices error: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Internal server error"},
+        )
+
+
+# ──────────────────────── POST /api/admin/auth/2fa/disable ───────
+
+@router.post(
+    "/auth/2fa/disable",
+    response_model=Disable2FAResponse,
+    summary="Disable Admin 2FA",
+    responses={
+        400: {"description": "2FA is not enabled"},
+        401: {"description": "Incorrect password"},
+    },
+)
+async def admin_disable_2fa(
+    request: Disable2FARequest,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Disable 2FA for admin user."""
+    if not admin.is_2fa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "2FA is not enabled"},
+        )
+    
+    # Verify password
+    if not verify_password(request.password, admin.password_hashed):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Incorrect password"},
+        )
+    
+    # Clear 2FA data
+    admin.is_2fa_enabled = False
+    admin.totp_secret_encrypted = None
+    
+    # Delete all backup codes
+    await db.execute(
+        sa_delete(TotpBackupCode).where(TotpBackupCode.user_id == admin.user_id)
+    )
+    
+    await db.commit()
+    
+    logger.info(f"2FA disabled for admin user_id={admin.user_id}")
+    return Disable2FAResponse(message="2FA disabled successfully")
+
+
+# ──────────────────────── POST /api/admin/auth/2fa/backup-codes/regenerate ───
+
+@router.post(
+    "/auth/2fa/backup-codes/regenerate",
+    response_model=RegenerateBackupCodesResponse,
+    summary="Admin Regenerate Backup Codes",
+    responses={
+        400: {"description": "2FA is not enabled|Invalid TOTP code"},
+        401: {"description": "Invalid or expired token"},
+    },
+)
+async def admin_regenerate_backup_codes(
+    request: RegenerateBackupCodesRequest,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Regenerate backup codes for admin user."""
+    if not admin.is_2fa_enabled or not admin.totp_secret_encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "2FA is not enabled"},
+        )
+    
+    # Verify TOTP code
+    secret = decrypt_secret(admin.totp_secret_encrypted)
+    if not verify_totp_code(secret, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Invalid TOTP code"},
+        )
+    
+    # Replay protection
+    if await check_totp_replay(redis, admin.user_id, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "TOTP code already used, please wait for a new code"},
+        )
+    
+    # Delete old backup codes
+    await db.execute(
+        sa_delete(TotpBackupCode).where(TotpBackupCode.user_id == admin.user_id)
+    )
+    
+    # Generate and persist new codes
+    new_codes = generate_backup_codes()
+    for code in new_codes:
+        db.add(TotpBackupCode(
+            user_id=admin.user_id,
+            code_hashed=hash_password(code),
+        ))
+    
+    await db.commit()
+    
+    logger.info(f"Backup codes regenerated for admin user_id={admin.user_id}")
+    return RegenerateBackupCodesResponse(backup_codes=new_codes)
+
+
+# ──────────────────────── Avatar Helpers ─────────────────────────────
+
+def _avatar_dir() -> Path:
+    """Return the avatar upload directory, creating it if needed."""
+    p = Path(settings.avatar_upload_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _user_avatar_dir(user_id: int) -> Path:
+    """Return the per-user avatar directory, creating it if needed."""
+    p = _avatar_dir() / str(user_id)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _user_avatar_exists(user_id: int) -> bool:
+    d = _avatar_dir() / str(user_id)
+    return d.is_dir() and any(d.iterdir())
+
+
+def _generate_avatar_variants(file_content: bytes, ext: str, user_id: int) -> dict:
+    """Save the original file and generate WebP variants at multiple sizes."""
+    user_dir = _user_avatar_dir(user_id)
+    url_prefix = f"/uploads/avatars/{user_id}"
+    avatar_urls = {}
+
+    # Save original
+    original_filename = f"original{ext}"
+    (user_dir / original_filename).write_bytes(file_content)
+    avatar_urls["original"] = f"{url_prefix}/{original_filename}"
+
+    # WebP conversion
+    img = Image.open(io.BytesIO(file_content))
+    img = img.convert("RGB")
+    width, height = img.size
+    min_dim = min(width, height)
+
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=85)
+    (user_dir / "original.webp").write_bytes(buf.getvalue())
+    avatar_urls["webp_original"] = f"{url_prefix}/original.webp"
+
+    for size in AVATAR_SIZES:
+        if min_dim > size:
+            resized = img.copy()
+            resized.thumbnail((size, size), Image.LANCZOS)
+            buf = io.BytesIO()
+            resized.save(buf, format="WEBP", quality=85)
+            (user_dir / f"{size}.webp").write_bytes(buf.getvalue())
+            avatar_urls[f"webp_{size}"] = f"{url_prefix}/{size}.webp"
+
+    return avatar_urls
+
+
+# ──────────────────────── GET /api/admin/auth/settings/avatar ────────
+
+@router.get(
+    "/auth/settings/avatar",
+    response_model=GetAvatarResponse,
+    summary="Get Admin Avatar URL",
+    responses={
+        400: {"description": "Invalid size parameter"},
+        401: {"description": "Invalid or expired token"},
+        404: {"description": "No avatar found"},
+    },
+)
+async def admin_get_avatar(
+    size: Optional[str] = Query("origin"),
+    admin: Account = Depends(require_admin),
+):
+    """Returns the avatar URL for the specified size."""
+    if size not in VALID_AVATAR_SIZES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Invalid size. Use origin, 64x64, or 256x256."},
+        )
+
+    filename = SIZE_TO_FILENAME[size]
+    file_path = _avatar_dir() / str(admin.user_id) / filename
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "No avatar found"},
+        )
+
+    return GetAvatarResponse(url=f"/uploads/avatars/{admin.user_id}/{filename}")
+
+
+# ──────────────────────── PUT /api/admin/auth/settings/avatar ────────
+
+@router.put(
+    "/auth/settings/avatar",
+    response_model=AvatarUploadResponse,
+    summary="Upload or Update Admin Avatar",
+    responses={
+        400: {"description": "Empty file"},
+        401: {"description": "Invalid or expired token"},
+        413: {"description": "File too large"},
+        415: {"description": "Unsupported file type"},
+    },
+)
+async def admin_upload_avatar(
+    file: UploadFile = File(...),
+    admin: Account = Depends(require_admin),
+):
+    """Upload an image file to set or replace the admin's avatar."""
+    if file.content_type not in ALLOWED_AVATAR_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"message": "Only JPEG, PNG, WebP, HEIC, and HEIF images are allowed"},
+        )
+
+    file_content = await file.read()
+
+    if len(file_content) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Uploaded file is empty"},
+        )
+
+    if len(file_content) > settings.avatar_max_file_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"message": f"File size exceeds {settings.avatar_max_file_size // (1024 * 1024)} MB limit"},
+        )
+
+    # Remove old avatar
+    old_dir = _avatar_dir() / str(admin.user_id)
+    if old_dir.is_dir():
+        shutil.rmtree(old_dir)
+
+    ext = AVATAR_EXTENSIONS[file.content_type]
+    avatar_urls = _generate_avatar_variants(file_content, ext, admin.user_id)
+
+    logger.info(f"Avatar uploaded for admin user_id={admin.user_id}")
+    return AvatarUploadResponse(message="Avatar uploaded successfully", avatar_urls=avatar_urls)
+
+
+# ──────────────────────── DELETE /api/admin/auth/settings/avatar ─────
+
+@router.delete(
+    "/auth/settings/avatar",
+    response_model=AvatarDeleteResponse,
+    summary="Delete Admin Avatar",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        404: {"description": "No avatar found"},
+    },
+)
+async def admin_delete_avatar(
+    admin: Account = Depends(require_admin),
+):
+    """Remove the admin's avatar."""
+    if not _user_avatar_exists(admin.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "No avatar found"},
+        )
+
+    shutil.rmtree(_avatar_dir() / str(admin.user_id))
+    logger.info(f"Avatar deleted for admin user_id={admin.user_id}")
+    return AvatarDeleteResponse(message="Avatar deleted successfully")
 
 
 # ── Logs helpers ─────────────────────────────────────────────────────
