@@ -35,7 +35,8 @@ jobs:
         id: prep
         run: |
           image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
-          sha_tag="sha-${GITHUB_SHA::7}"
+          short_sha="$(git rev-parse --short HEAD)"
+          sha_tag="sha-${short_sha}"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
 
