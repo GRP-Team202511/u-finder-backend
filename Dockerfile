@@ -1,5 +1,15 @@
 # Match CI Python version
+ARG APT_MIRROR=
+ARG FORCE_APT_IPV4=false
+ARG PIP_INDEX_URL=
+ARG PIP_CERT=
+
 FROM python:3.12-slim-bookworm AS builder
+
+ARG APT_MIRROR
+ARG FORCE_APT_IPV4
+ARG PIP_INDEX_URL
+ARG PIP_CERT
 
 WORKDIR /app
 
@@ -8,28 +18,41 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
-      sed -i 's|deb.debian.org|mirrors.cloud.tencent.com|g; s|security.debian.org|mirrors.cloud.tencent.com|g' /etc/apt/sources.list.d/debian.sources; \
-    fi && \
-    echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 && \
+RUN if [ -n "$APT_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
+        fi && \
+        if [ "$FORCE_APT_IPV4" = "true" ]; then \
+            echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4; \
+        fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install -i https://mirrors.cloud.tencent.com/pypi/simple \
-    --trusted-host mirrors.cloud.tencent.com \
-    -r requirements.txt
+RUN if [ -n "$PIP_INDEX_URL" ] && [ -n "$PIP_CERT" ]; then \
+            pip install --index-url "$PIP_INDEX_URL" --cert "$PIP_CERT" -r requirements.txt; \
+        elif [ -n "$PIP_INDEX_URL" ]; then \
+            pip install --index-url "$PIP_INDEX_URL" -r requirements.txt; \
+        elif [ -n "$PIP_CERT" ]; then \
+            pip install --cert "$PIP_CERT" -r requirements.txt; \
+        else \
+            pip install -r requirements.txt; \
+        fi
 
 # --- Runtime stage ---
 FROM python:3.12-slim-bookworm
 
+ARG APT_MIRROR
+ARG FORCE_APT_IPV4
+
 # Install only the runtime lib needed by psycopg2 / asyncpg
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
-            sed -i 's|deb.debian.org|mirrors.cloud.tencent.com|g; s|security.debian.org|mirrors.cloud.tencent.com|g' /etc/apt/sources.list.d/debian.sources; \
+RUN if [ -n "$APT_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
         fi && \
-        echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4 && \
+        if [ "$FORCE_APT_IPV4" = "true" ]; then \
+            echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4; \
+        fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
