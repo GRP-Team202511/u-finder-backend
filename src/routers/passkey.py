@@ -48,7 +48,7 @@ from src.schemas.passkey import (
 from src.utils.auth_deps import get_current_user_id
 from src.utils.password_utils import hash_token
 from src.utils.jwt_utils import create_temp_token
-from src.utils.session_utils import save_session
+from src.utils.session_utils import normalize_user_agent, save_session
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -460,10 +460,11 @@ async def passkey_login_verify(
         # Create session (same as normal login)
         refresh_token = create_temp_token()
         token_hashed = hash_token(refresh_token)
+        normalized_user_agent = normalize_user_agent(user_agent)
         refresh_token_record = RefreshToken(
             user_id=account.user_id,
             token_hashed=token_hashed,
-            user_agent=user_agent[:100],
+            user_agent=normalized_user_agent,
             expire_at=datetime.now(timezone.utc) + timedelta(days=30),
         )
         db.add(refresh_token_record)
@@ -473,7 +474,7 @@ async def passkey_login_verify(
             redis,
             token=refresh_token,
             user_id=account.user_id,
-            user_agent=user_agent[:100],
+            user_agent=normalized_user_agent,
         )
 
         # Clean up the challenge

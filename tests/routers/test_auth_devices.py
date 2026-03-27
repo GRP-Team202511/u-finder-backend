@@ -15,6 +15,7 @@ FAKE_TOKEN_HASH = "fakehash123"
 
 CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 SAFARI_MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+TRUNCATED_IOS_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Vers"
 
 
 def _make_refresh_token(
@@ -69,14 +70,16 @@ class TestGetDevices:
         current = body["devices"][0]
         assert current["session_id"] == 42
         assert current["is_current"] is True
-        assert current["browser"] == "Chrome 122"
-        assert current["os"] == "Windows 10"
+        assert current["browser"] == "Chrome"
+        assert current["os"] == "Windows 10/11"
         assert current["device_type"] == "PC"
 
         # Second device should not be current
         other = body["devices"][1]
         assert other["session_id"] == 38
         assert other["is_current"] is False
+        assert other["browser"] == "Safari"
+        assert other["os"] == "iOS 17.0"
         assert other["device_type"] == "Mobile"
 
     @patch("src.routers.auth.hash_token", return_value=FAKE_TOKEN_HASH)
@@ -109,6 +112,22 @@ class TestGetDevices:
         assert device["os"] == "Unknown"
         assert device["device_type"] == "Unknown"
         assert device["is_current"] is True
+
+    @patch("src.routers.auth.hash_token", return_value=FAKE_TOKEN_HASH)
+    @patch("src.routers.auth.get_current_user_id", new_callable=AsyncMock, return_value=1)
+    async def test_get_devices_truncated_ios_user_agent_keeps_os_version(self, mock_auth, mock_hash, client, mock_db):
+        """A truncated iPhone UA should still report the OS version from the raw UA token."""
+        sessions = [
+            _make_refresh_token(id=11, token_hashed=FAKE_TOKEN_HASH, user_agent=TRUNCATED_IOS_UA),
+        ]
+        mock_db.execute.return_value = _make_scalars_result(sessions)
+
+        response = await client.get(URL, headers={"Authorization": BEARER})
+
+        assert response.status_code == 200
+        device = response.json()["devices"][0]
+        assert device["os"] == "iOS 18.7"
+        assert device["device_type"] == "Mobile"
 
     @patch(
         "src.routers.auth.get_current_user_id",

@@ -5,6 +5,7 @@ Contains authentication related endpoints such as user login
 from fastapi import APIRouter, HTTPException, Header, status, Depends
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
@@ -53,6 +54,7 @@ from src.utils import (
     decrypt_secret,
     verify_totp_code,
     check_totp_replay,
+    normalize_user_agent,
 )
 from redis.asyncio import Redis
 from src.config.logger import get_logger
@@ -223,10 +225,11 @@ async def login(
         # Create refresh token and store in database
         refresh_token = create_temp_token()
         token_hashed = hash_token(refresh_token)
+        normalized_user_agent = normalize_user_agent(user_agent)
         refresh_token_record = RefreshToken(
             user_id=user.user_id,
             token_hashed=token_hashed,
-            user_agent=user_agent[:100],  # Limit to 100 chars
+            user_agent=normalized_user_agent,
             expire_at=datetime.now(timezone.utc) + timedelta(days=30)
         )
         db.add(refresh_token_record)
@@ -237,7 +240,7 @@ async def login(
             redis,
             token=refresh_token,
             user_id=user.user_id,
-            user_agent=user_agent[:100],
+            user_agent=normalized_user_agent,
         )
 
         logger.info(f"Login successful for user: {email}")
@@ -621,10 +624,11 @@ async def _verify_signup_email_impl(
     
     # Create refresh token and store in database
     refresh_token = create_temp_token()
+    normalized_user_agent = normalize_user_agent(user_agent)
     refresh_token_record = RefreshToken(
         user_id=user.user_id,
         token_hashed=hash_token(refresh_token),
-        user_agent=user_agent[:100],  # Limit to 100 chars
+        user_agent=normalized_user_agent,
         expire_at=datetime.now(timezone.utc) + timedelta(days=30)
     )
     db.add(refresh_token_record)
@@ -1420,18 +1424,56 @@ async def verify_delete_email(
         )
 
 def _format_browser(ua) -> str:
-    """Return '<family> <major>' or 'Unknown'."""
+    """Return a normalized browser family name or 'Unknown'."""
     family = ua.browser.family
-    version = ua.browser.version_string
     if not family or family == "Other":
         return "Unknown"
-    # Only include major version for readability
-    major = version.split(".")[0] if version else ""
-    return f"{family} {major}".strip()
+
+    family_aliases = {
+        "Mobile Safari": "Safari",
+    }
+    return family_aliases.get(family, family)
 
 
-def _format_os(ua) -> str:
+def _extract_os_from_user_agent(user_agent: str) -> Optional[str]:
+    """Extract the most reliable OS label directly from a raw user-agent string."""
+    if not user_agent:
+        return None
+
+    ios_match = re.search(r"\b(?:CPU (?:iPhone )?OS|CPU OS|iPhone OS) ([0-9_]+)", user_agent, re.IGNORECASE)
+    if ios_match:
+        return f"iOS {ios_match.group(1).replace('_', '.')}"
+
+    android_match = re.search(r"\bAndroid ([0-9.]+)", user_agent, re.IGNORECASE)
+    if android_match:
+        return f"Android {android_match.group(1)}"
+
+    mac_match = re.search(r"\bMac OS X ([0-9_]+)", user_agent)
+    if mac_match and "like Mac OS X" not in user_agent:
+        return f"Mac OS X {mac_match.group(1).replace('_', '.')}"
+
+    windows_match = re.search(r"\bWindows NT ([0-9.]+)", user_agent, re.IGNORECASE)
+    if windows_match:
+        nt_version = windows_match.group(1)
+        windows_versions = {
+            "10.0": "Windows 10/11",
+            "6.3": "Windows 8.1",
+            "6.2": "Windows 8",
+            "6.1": "Windows 7",
+            "6.0": "Windows Vista",
+            "5.1": "Windows XP",
+        }
+        return windows_versions.get(nt_version, f"Windows NT {nt_version}")
+
+    return None
+
+
+def _format_os(ua, user_agent: str) -> str:
     """Return '<os_family> <os_version>' or 'Unknown'."""
+    os_from_user_agent = _extract_os_from_user_agent(user_agent)
+    if os_from_user_agent:
+        return os_from_user_agent
+
     family = ua.os.family
     version = ua.os.version_string
     if not family or family == "Other":
@@ -1584,7 +1626,7 @@ async def get_devices(
             devices.append(DeviceSession(
                 session_id=s.id,
                 browser=_format_browser(ua),
-                os=_format_os(ua),
+                os=_format_os(ua, s.user_agent or ""),
                 device_type=_parse_device_type(ua),
                 created_at=s.created_at.isoformat() if s.created_at else "",
                 is_current=(s.token_hashed == current_token_hashed),
