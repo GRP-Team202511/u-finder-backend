@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.constants import UserType
 from src.config.logger import get_logger
-from src.database import get_db, Account
+from src.database import get_db, Account, TotpBackupCode
 from src.database.models import LlmUsageLog
 from src.schemas.admin import (
     ActionResult,
@@ -36,6 +36,8 @@ from src.schemas.admin import (
     ModelCostSnapshot,
     Money,
 )
+from src.schemas.auth import GetUserInfoResponse
+from src.schemas.two_factor import TwoFAStatusResponse
 from src.utils.jwt_utils import create_access_token, verify_token
 from src.utils.password_utils import verify_password
 
@@ -594,6 +596,60 @@ def _available_actions(
     if caller_user_type == UserType.SUPER_ADMIN:
         base.append("promote")
     return base
+
+
+# ── GET /api/admin/auth/2fa/status ──────────────────────────────────
+
+@router.get(
+    "/auth/2fa/status",
+    response_model=TwoFAStatusResponse,
+    summary="Get Admin 2FA Status",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+    },
+)
+async def get_admin_2fa_status(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get 2FA status for the current admin user."""
+    remaining = 0
+    if admin.is_2fa_enabled:
+        result = await db.execute(
+            select(func.count()).select_from(TotpBackupCode).where(
+                TotpBackupCode.user_id == admin.user_id,
+                TotpBackupCode.is_used == False,  # noqa: E712
+            )
+        )
+        remaining = result.scalar() or 0
+
+    return TwoFAStatusResponse(
+        is_2fa_enabled=admin.is_2fa_enabled,
+        backup_codes_remaining=remaining,
+    )
+
+
+# ── GET /api/admin/auth/settings/info ───────────────────────────────
+
+@router.get(
+    "/auth/settings/info",
+    response_model=GetUserInfoResponse,
+    summary="Get Admin User Info",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+    },
+)
+async def get_admin_user_info(
+    admin: Account = Depends(require_admin),
+):
+    """Get user information for the current admin user."""
+    return GetUserInfoResponse(
+        email=admin.email,
+        name=admin.user_name,
+        user_type=admin.user_type,
+    )
 
 
 # ── Logs helpers ─────────────────────────────────────────────────────
