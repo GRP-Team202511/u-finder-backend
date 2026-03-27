@@ -203,6 +203,11 @@ class TestConfirm2FA:
 
 class TestVerify2FA:
 
+    LONG_USER_AGENT = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_3_1 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3.1 Mobile/15E148 Safari/604.1"
+    )
+
     @patch("src.routers.two_factor.check_totp_replay", return_value=False)
     @patch("src.routers.two_factor.save_session", new_callable=AsyncMock)
     @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
@@ -235,6 +240,39 @@ class TestVerify2FA:
         assert body["id"] == 1
         assert body["name"] == "Test User"
         assert isinstance(body["token"], str) and body["token"]
+
+    @patch("src.routers.two_factor.check_totp_replay", return_value=False)
+    @patch("src.routers.two_factor.save_session", new_callable=AsyncMock)
+    @patch("src.routers.two_factor.decrypt_secret", return_value="JBSWY3DPEHPK3PXP")
+    @patch("src.routers.two_factor.verify_totp_code", return_value=True)
+    @patch("src.routers.two_factor.hash_token", return_value="hashed_temp")
+    async def test_verify_totp_preserves_full_user_agent(
+        self, mock_hash, mock_verify, mock_decrypt, mock_save, mock_replay, client, mock_db, mock_redis
+    ):
+        """2FA verification should keep long user-agent strings intact."""
+        temp_token_record = MagicMock()
+        temp_token_record.user_id = 1
+        temp_token_record.token_type = "2fa_verify"
+        temp_token_record.expire_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        account = _make_account(is_2fa_enabled=True, totp_secret_encrypted="enc_secret")
+
+        mock_db.execute.side_effect = [
+            _db_result(temp_token_record),
+            _db_result(account),
+        ]
+
+        response = await client.post(
+            "/auth/2fa/verify",
+            headers={"Temp-Token": "temp-token-value", "User-Agent": self.LONG_USER_AGENT},
+            json={"code": "123456"},
+        )
+
+        assert response.status_code == 200
+        saved_token = mock_db.add.call_args.args[0]
+        assert saved_token.user_agent == self.LONG_USER_AGENT
+        assert len(saved_token.user_agent) > 100
+        assert mock_save.await_args.kwargs["user_agent"] == self.LONG_USER_AGENT
 
     @patch("src.routers.two_factor.save_session", new_callable=AsyncMock)
     @patch("src.routers.two_factor.verify_password", return_value=True)
