@@ -76,10 +76,10 @@ jobs:
 
       - name: Write deployment environment file
         run: |
-          umask 177
           cat <<'EOF' > .env.deploy
           ${{ secrets.DEPLOY_ENV_FILE }}
           EOF
+          chmod 644 .env.deploy
 
       - name: Copy deployment assets to server
         uses: appleboy/scp-action@v0.1.7
@@ -110,6 +110,7 @@ jobs:
             mkdir -p "$DEPLOY_PATH"
             cd "$DEPLOY_PATH"
             mv -f .env.deploy .env
+            chmod 600 .env
             echo "$REGISTRY_PASSWORD" | docker login ghcr.io -u "$REGISTRY_USERNAME" --password-stdin
             export UFINDER_IMAGE="$IMAGE_REF"
             docker compose -f docker-compose.prod.yml pull backend
