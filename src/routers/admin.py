@@ -10,6 +10,7 @@ Endpoints implemented:
 - POST   /api/admin/users/{userId}/unblock
 - PATCH  /api/admin/users/{userId}/role
 """
+import json
 import re
 import shutil
 from datetime import date, datetime, timedelta, timezone
@@ -28,8 +29,12 @@ from src.database import get_db, get_redis, Account, TotpBackupCode, RefreshToke
 from src.database.models import LlmUsageLog
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import delete_session_by_hash
-from src.utils import generate_verification_code, send_verification_email, decrypt_secret, verify_totp_code, check_totp_replay, generate_backup_codes, create_temp_token
-from src.utils.password_utils import hash_token
+from src.utils import (
+    generate_verification_code, send_verification_email, decrypt_secret,
+    verify_totp_code, check_totp_replay, generate_backup_codes, create_temp_token,
+    generate_totp_secret, get_totp_uri, generate_qr_code_base64, encrypt_secret,
+    hash_password, hash_token,
+)
 from src.schemas.admin import (
     ActionResult,
     AdminDashboardSummary,
@@ -58,6 +63,9 @@ from src.schemas.auth import (
 )
 from src.schemas.two_factor import (
     TwoFAStatusResponse,
+    Setup2FAResponse,
+    Confirm2FARequest,
+    Confirm2FAResponse,
     Disable2FARequest,
     Disable2FAResponse,
     RegenerateBackupCodesRequest,
@@ -65,6 +73,7 @@ from src.schemas.two_factor import (
 )
 from src.utils.jwt_utils import create_access_token, verify_token
 from src.utils.password_utils import verify_password
+from src.utils.session_utils import save_session
 
 logger = get_logger(__name__)
 
@@ -72,6 +81,10 @@ router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 # Log directory (same as src/config/logger.py)
 LOG_DIR = Path("logs")
+
+# Redis key helpers for 2FA setup
+_2FA_SETUP_PREFIX = "2fa_setup:"
+_2FA_SETUP_TTL = 300  # 5 minutes
 
 # Regex for parsing a single log line produced by our RotatingFileHandler.
 # Format: "2026-03-10 17:34:32 - name - LEVEL - [file:line] - message"
@@ -153,7 +166,9 @@ async def require_admin(
 )
 async def admin_login(
     body: AdminLoginRequest,
+    user_agent: Optional[str] = Header(None, alias="User-Agent"),
     db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
 ):
     """Authenticate admin user and return a JWT access token."""
     email = body.email.lower()
@@ -196,6 +211,26 @@ async def admin_login(
             "user_type": account.user_type,
         }
     )
+
+    # 5. Create RefreshToken session for device management
+    ua_str = (user_agent or "")[:100]
+    refresh_record = RefreshToken(
+        user_id=account.user_id,
+        token_hashed=hash_token(token),
+        user_agent=ua_str,
+        expire_at=datetime.now(timezone.utc) + timedelta(days=30),
+    )
+    db.add(refresh_record)
+    await db.commit()
+
+    # Cache session in Redis
+    if redis:
+        await save_session(
+            redis,
+            token=token,
+            user_id=account.user_id,
+            user_agent=ua_str,
+        )
 
     logger.info("Admin login successful: user_id=%s", account.user_id)
     return AdminLoginResponse(
@@ -655,6 +690,138 @@ async def get_admin_2fa_status(
     )
 
 
+# ── POST /api/admin/auth/2fa/setup ─────────────────────────────────
+
+@router.post(
+    "/auth/2fa/setup",
+    response_model=Setup2FAResponse,
+    summary="Setup Admin 2FA",
+    responses={
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+        409: {"description": "2FA is already enabled"},
+    },
+)
+async def admin_setup_2fa(
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Generate TOTP secret and QR code for the admin user."""
+    if admin.is_2fa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "2FA is already enabled"},
+        )
+
+    # Generate TOTP secret and backup codes
+    secret = generate_totp_secret()
+    backup_codes = generate_backup_codes()
+    totp_uri = get_totp_uri(secret, admin.email)
+    qr_base64 = generate_qr_code_base64(totp_uri)
+
+    # Store in Redis temporarily (5 min)
+    if redis is not None:
+        setup_key = f"{_2FA_SETUP_PREFIX}{admin.user_id}"
+        await redis.set(
+            setup_key,
+            json.dumps({"secret": secret, "backup_codes": backup_codes}),
+            ex=_2FA_SETUP_TTL,
+        )
+    else:
+        logger.warning("Redis unavailable — 2FA setup data cannot be cached")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": "Service temporarily unavailable, please try again later"},
+        )
+
+    logger.info(f"2FA setup initiated for admin user_id={admin.user_id}")
+
+    return Setup2FAResponse(
+        totp_uri=totp_uri,
+        qr_code_base64=qr_base64,
+        backup_codes=backup_codes,
+    )
+
+
+# ── POST /api/admin/auth/2fa/confirm ───────────────────────────────
+
+@router.post(
+    "/auth/2fa/confirm",
+    response_model=Confirm2FAResponse,
+    summary="Confirm Admin 2FA Binding",
+    responses={
+        400: {"description": "Invalid TOTP code or setup expired"},
+        401: {"description": "Invalid or expired token"},
+        403: {"description": "Admin permission required"},
+        409: {"description": "2FA is already enabled"},
+    },
+)
+async def admin_confirm_2fa(
+    request: Confirm2FARequest,
+    admin: Account = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+):
+    """Confirm 2FA binding with first TOTP code for admin user."""
+    if admin.is_2fa_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": "2FA is already enabled"},
+        )
+
+    # Retrieve pending setup from Redis
+    if redis is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": "Service temporarily unavailable"},
+        )
+
+    setup_key = f"{_2FA_SETUP_PREFIX}{admin.user_id}"
+    raw = await redis.get(setup_key)
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "2FA setup not found or expired, please call /auth/2fa/setup first"},
+        )
+
+    setup_data = json.loads(raw)
+    secret = setup_data["secret"]
+    backup_codes: list[str] = setup_data["backup_codes"]
+
+    # Verify the TOTP code
+    if not verify_totp_code(secret, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Invalid TOTP code"},
+        )
+
+    # Replay protection
+    if await check_totp_replay(redis, admin.user_id, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "TOTP code already used, please wait for a new code"},
+        )
+
+    # Persist: encrypt secret → Account, hash backup codes → TotpBackupCode
+    admin.totp_secret_encrypted = encrypt_secret(secret)
+    admin.is_2fa_enabled = True
+
+    for code in backup_codes:
+        db.add(TotpBackupCode(
+            user_id=admin.user_id,
+            code_hashed=hash_password(code),
+        ))
+
+    await db.commit()
+
+    # Clean up Redis
+    await redis.delete(setup_key)
+
+    logger.info(f"2FA enabled for admin user_id={admin.user_id}")
+    return Confirm2FAResponse(message="2FA enabled successfully")
+
+
 # ── GET /api/admin/auth/settings/info ───────────────────────────────
 
 @router.get(
@@ -920,6 +1087,7 @@ async def admin_reset_resend(
     },
 )
 async def admin_get_devices(
+    authorization: str = Header(..., alias="Authorization"),
     admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
@@ -927,8 +1095,8 @@ async def admin_get_devices(
     """Returns all active login sessions for the current admin user."""
     try:
         # Extract current token hash for is_current comparison
-        # Note: admin is already authenticated via require_admin, so we need to get token from headers
-        # For simplicity, we'll just return all sessions without is_current distinction
+        current_token = authorization.replace("Bearer ", "")
+        current_token_hashed = hash_token(current_token)
         
         result = await db.execute(
             select(RefreshToken).where(
@@ -947,7 +1115,7 @@ async def admin_get_devices(
                 os=_format_os(ua),
                 device_type=_parse_device_type(ua),
                 created_at=s.created_at.isoformat() if s.created_at else "",
-                is_current=False,  # Simplified: not tracking current session
+                is_current=(s.token_hashed == current_token_hashed),
             ))
         
         return DevicesResponse(devices=devices, total=len(devices))
