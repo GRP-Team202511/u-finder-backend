@@ -10,6 +10,7 @@ import re
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    turnstile_token: str = ""
 
 
 class LoginResponse(BaseModel):
@@ -37,6 +38,7 @@ class SignUpRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="User's display name")
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=20, description="User's password (8-20 characters)")
+    turnstile_token: str = ""
     # Note: user_type is automatically set to 1 (user) by default
     
     @field_validator('email')
@@ -76,6 +78,7 @@ class VerifySignupEmailResponse(BaseModel):
 # ============ Reset Password ============
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
+    turnstile_token: str = ""
 
 
 class ResetPasswordResponse(BaseModel):

@@ -32,6 +32,7 @@ class PasskeyRegisterVerifyResponse(BaseModel):
 # ============ Login Options ============
 class PasskeyLoginOptionsRequest(BaseModel):
     email: EmailStr
+    turnstile_token: str = ""
 
 
 class PasskeyLoginOptionsResponse(BaseModel):

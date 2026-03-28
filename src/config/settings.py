@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # 2FA / TOTP Settings
     totp_encryption_key: str = ""  # Base64-encoded 32-byte AES-256 key
 
+    # Cloudflare Turnstile Settings
+    turnstile_secret_key: str = ""
+    turnstile_enabled: bool = False  # Enable in production
+
     # Passkey / WebAuthn Settings
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "U-Finder"
