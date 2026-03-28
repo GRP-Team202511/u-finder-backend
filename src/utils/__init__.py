@@ -24,6 +24,7 @@ from .totp_utils import (
     generate_backup_codes,
     check_totp_replay,
 )
+from .turnstile import verify_turnstile_token
 
 __all__ = [
     "create_access_token",
@@ -53,4 +54,5 @@ __all__ = [
     "decrypt_secret",
     "generate_backup_codes",
     "check_totp_replay",
+    "verify_turnstile_token",
 ]

@@ -2,7 +2,7 @@
 Authentication router module
 Contains authentication related endpoints such as user login
 """
-from fastapi import APIRouter, HTTPException, Header, status, Depends
+from fastapi import APIRouter, HTTPException, Header, Request, status, Depends
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
 import re
@@ -62,6 +62,7 @@ from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken, TotpBackupCode
 from src.utils.session_utils import save_session, get_session, delete_session, delete_session_by_hash, delete_all_user_sessions
 from src.utils.auth_deps import get_current_user_id
+from src.utils.turnstile import verify_turnstile_token
 from user_agents import parse as parse_ua
 
 logger = get_logger(__name__)
@@ -155,6 +156,7 @@ async def _reset_password_with_code(
 )
 async def login(
     login_data: LoginRequest,
+    request: Request,
     user_agent: str = Header(default="Unknown", alias="User-Agent"),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
@@ -166,6 +168,10 @@ async def login(
     - **password**: User password (required)
     """
     try:
+        # Cloudflare Turnstile verification
+        client_ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else None)
+        await verify_turnstile_token(login_data.turnstile_token, client_ip)
+
         logger.info(f"Login attempt for email: {login_data.email}")
         
         # Normalize email to lowercase
@@ -351,7 +357,7 @@ async def logout(
         409: {"model": ErrorResponse, "description": "Account exists"},
     },
 )
-async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
+async def signup(request: SignUpRequest, http_request: Request, db: AsyncSession = Depends(get_db)):
     """
     User signup endpoint
     
@@ -363,6 +369,10 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     
     Returns temp_token for email verification
     """
+    # Cloudflare Turnstile verification
+    client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
+    await verify_turnstile_token(request.turnstile_token, client_ip)
+
     logger.info(f"Signup attempt for email: {request.email}")
     
     # Normalize email to lowercase
@@ -701,7 +711,7 @@ async def verify_signup_email(
         404: {"model": ErrorResponse, "description": "No account record for this email"},
     },
 )
-async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+async def reset_password(request: ResetPasswordRequest, http_request: Request, db: AsyncSession = Depends(get_db)):
     """
     Password reset request endpoint
     
@@ -709,6 +719,10 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
     
     Returns temp_token for password reset verification
     """
+    # Cloudflare Turnstile verification
+    client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
+    await verify_turnstile_token(request.turnstile_token, client_ip)
+
     logger.info(f"Password reset request for email: {request.email}")
     
     # Normalize email to lowercase
