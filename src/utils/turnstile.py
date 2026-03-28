@@ -26,12 +26,23 @@ async def verify_turnstile_token(token: str, remote_ip: str | None = None) -> bo
 
     Raises:
         HTTPException 400 if the token is missing or verification fails.
+        HTTPException 500 if the server Turnstile configuration is invalid.
         HTTPException 503 if the Turnstile API is unreachable.
     """
     settings = get_settings()
 
     if not settings.turnstile_enabled:
         return True
+
+    if not settings.turnstile_secret_key:
+        logger.error(
+            "TURNSTILE_ENABLED is true but TURNSTILE_SECRET_KEY is empty. "
+            "Set the secret key or disable Turnstile."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Server misconfiguration: Turnstile secret key not set"},
+        )
 
     if not token:
         raise HTTPException(
@@ -49,9 +60,22 @@ async def verify_turnstile_token(token: str, remote_ip: str | None = None) -> bo
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(TURNSTILE_VERIFY_URL, data=payload)
+            resp.raise_for_status()
             result = resp.json()
+    except httpx.HTTPStatusError as exc:
+        logger.error("Turnstile API returned HTTP %s: %s", exc.response.status_code, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": "Human verification service unavailable"},
+        )
     except httpx.HTTPError as exc:
         logger.error("Turnstile API request failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"message": "Human verification service unavailable"},
+        )
+    except (ValueError, KeyError) as exc:
+        logger.error("Turnstile API returned non-JSON response: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Human verification service unavailable"},
