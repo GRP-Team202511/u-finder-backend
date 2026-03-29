@@ -112,7 +112,7 @@ COMMENT ON COLUMN "account"."user_name" IS 'User''s display name';
 
 COMMENT ON COLUMN "account"."email" IS 'Emails are all in small cases';
 
-COMMENT ON COLUMN "account"."user_type" IS '1=Student, 2=Institution, 99=Admin';
+COMMENT ON COLUMN "account"."user_type" IS '1=User (Student), 2=Pro User (reserved), 3=Admin, 4=Super Admin';
 
 COMMENT ON COLUMN "account"."totp_secret_encrypted" IS 'use AES-GCM to encrypt, `not null` if 2FA is enabled';
 
