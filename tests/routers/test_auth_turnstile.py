@@ -174,3 +174,60 @@ class TestResetTurnstile:
             })
             assert response.status_code == 200
             mock_verify.assert_called_once()
+
+    @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock)
+    async def test_reset_self_with_valid_auth_skips_turnstile(self, mock_email, client, mock_db):
+        """Authenticated user resetting own password → Turnstile is NOT called."""
+        user = _make_user(user_id=1, email="test@example.com")
+        mock_db.execute.return_value.scalar_one_or_none.return_value = user
+
+        with (
+            patch("src.routers.auth.get_current_user_id", new_callable=AsyncMock, return_value=1) as mock_auth,
+            patch("src.routers.auth.verify_turnstile_token", new_callable=AsyncMock) as mock_verify,
+        ):
+            response = await client.post(
+                RESET_URL,
+                json={"email": "test@example.com"},
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert response.status_code == 200
+            mock_auth.assert_called_once()
+            mock_verify.assert_not_called()
+
+    async def test_reset_with_invalid_auth_still_requires_turnstile(self, client):
+        """Invalid Authorization header → Turnstile is still enforced."""
+        with (
+            patch("src.routers.auth.get_current_user_id", new_callable=AsyncMock) as mock_auth,
+            patch("src.routers.auth.verify_turnstile_token", new_callable=AsyncMock) as mock_verify,
+        ):
+            from fastapi import HTTPException
+            mock_auth.side_effect = HTTPException(status_code=401, detail={"message": "Invalid or expired token"})
+            mock_verify.side_effect = HTTPException(status_code=400, detail={"message": "Missing turnstile_token"})
+
+            response = await client.post(
+                RESET_URL,
+                json={"email": "test@example.com"},
+                headers={"Authorization": "Bearer bad-token"},
+            )
+            assert response.status_code == 400
+            mock_verify.assert_called_once()
+
+    @patch("src.routers.auth.send_verification_email", new_callable=AsyncMock)
+    async def test_reset_other_email_with_valid_auth_requires_turnstile(self, mock_email, client, mock_db):
+        """Authenticated user resetting ANOTHER user's password → Turnstile IS required."""
+        # Auth user is user_id=1, but target email belongs to user_id=2
+        target_user = _make_user(user_id=2, email="other@example.com")
+        mock_db.execute.return_value.scalar_one_or_none.return_value = target_user
+
+        with (
+            patch("src.routers.auth.get_current_user_id", new_callable=AsyncMock, return_value=1) as mock_auth,
+            patch("src.routers.auth.verify_turnstile_token", new_callable=AsyncMock, return_value=True) as mock_verify,
+        ):
+            response = await client.post(
+                RESET_URL,
+                json={"email": "other@example.com", "turnstile_token": "valid-token"},
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert response.status_code == 200
+            mock_auth.assert_called_once()
+            mock_verify.assert_called_once()

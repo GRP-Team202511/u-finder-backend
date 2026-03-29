@@ -715,8 +715,8 @@ async def reset_password(
     request: ResetPasswordRequest,
     http_request: Request,
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
-    authorization: Optional[str] = Header(None),
+    redis: Optional[Redis] = Depends(get_redis),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
 ):
     """
     Password reset request endpoint
@@ -725,19 +725,24 @@ async def reset_password(
     
     Returns temp_token for password reset verification.
     Cloudflare Turnstile is required for unauthenticated requests only.
-    Authenticated users (with valid Authorization header) skip Turnstile.
+    Authenticated users resetting their own password skip Turnstile.
     """
-    # If the user is already logged in, skip Turnstile verification
-    is_authenticated = False
+    # If the user is already logged in and resetting their own password, skip Turnstile
+    is_self_reset = False
     if authorization:
         try:
-            await get_current_user_id(authorization, db, redis)
-            is_authenticated = True
+            auth_user_id = await get_current_user_id(authorization, db, redis)
+            # Verify the authenticated user is resetting their own password
+            email = request.email.lower()
+            result = await db.execute(select(Account).where(Account.email == email))
+            target_user = result.scalar_one_or_none()
+            if target_user and target_user.user_id == auth_user_id:
+                is_self_reset = True
         except HTTPException:
             pass  # Invalid token, treat as unauthenticated
 
-    if not is_authenticated:
-        # Cloudflare Turnstile verification for unauthenticated requests
+    if not is_self_reset:
+        # Cloudflare Turnstile verification for unauthenticated or non-self resets
         client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
         await verify_turnstile_token(request.turnstile_token, client_ip)
 
@@ -746,9 +751,12 @@ async def reset_password(
     # Normalize email to lowercase
     email = request.email.lower()
     
-    # Check if user exists
-    result = await db.execute(select(Account).where(Account.email == email))
-    user = result.scalar_one_or_none()
+    # Check if user exists (skip if already found during self-reset check)
+    if is_self_reset:
+        user = target_user
+    else:
+        result = await db.execute(select(Account).where(Account.email == email))
+        user = result.scalar_one_or_none()
     if not user:
         logger.warning(f"Password reset failed: No account for email: {email}")
         raise HTTPException(
