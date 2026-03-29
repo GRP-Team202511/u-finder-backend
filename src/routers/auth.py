@@ -711,17 +711,35 @@ async def verify_signup_email(
         404: {"model": ErrorResponse, "description": "No account record for this email"},
     },
 )
-async def reset_password(request: ResetPasswordRequest, http_request: Request, db: AsyncSession = Depends(get_db)):
+async def reset_password(
+    request: ResetPasswordRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    authorization: Optional[str] = Header(None),
+):
     """
     Password reset request endpoint
     
     - **email**: User's email address
     
-    Returns temp_token for password reset verification
+    Returns temp_token for password reset verification.
+    Cloudflare Turnstile is required for unauthenticated requests only.
+    Authenticated users (with valid Authorization header) skip Turnstile.
     """
-    # Cloudflare Turnstile verification
-    client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
-    await verify_turnstile_token(request.turnstile_token, client_ip)
+    # If the user is already logged in, skip Turnstile verification
+    is_authenticated = False
+    if authorization:
+        try:
+            await get_current_user_id(authorization, db, redis)
+            is_authenticated = True
+        except HTTPException:
+            pass  # Invalid token, treat as unauthenticated
+
+    if not is_authenticated:
+        # Cloudflare Turnstile verification for unauthenticated requests
+        client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
+        await verify_turnstile_token(request.turnstile_token, client_ip)
 
     logger.info(f"Password reset request for email: {request.email}")
     
