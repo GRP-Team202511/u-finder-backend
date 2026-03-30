@@ -51,8 +51,8 @@ class ChangeRoleRequest(BaseModel):
 
 
 class LlmCostToday(BaseModel):
-    """LLM Cost KPI card (Alibaba Cloud billing, 24 h delayed)."""
-    currency: str = "USD"
+    """LLM Cost KPI card (Alibaba Cloud billing, monthly cumulative)."""
+    currency: str = "CNY"
     amount: float = 0.0
     budget_per_day: Optional[float] = None
 
@@ -65,7 +65,7 @@ class LogEntry(BaseModel):
 
 
 class Money(BaseModel):
-    currency: str = "USD"
+    currency: str = "CNY"
     amount: float = 0.0
 
 

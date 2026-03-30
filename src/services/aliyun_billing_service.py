@@ -113,3 +113,68 @@ async def get_daily_cost(
         total_requests=total_items,
         currency=currency,
     )
+
+
+async def get_cost_by_date(target_date: date) -> AliyunDailyCost:
+    """Query Alibaba Cloud DescribeInstanceBill for a **single day**.
+
+    Uses ``BillingCycle`` + ``BillingDate`` + ``Granularity=DAILY``
+    (without ``ProductCode`` to avoid *ProductNotFind* errors).
+    """
+    if not settings.aliyun_access_key_id or not settings.aliyun_access_key_secret:
+        return AliyunDailyCost(
+            billing_date=target_date.isoformat(),
+            total_pretax_amount=0.0,
+            total_requests=0,
+            currency="CNY",
+        )
+
+    billing_cycle = target_date.strftime("%Y-%m")
+    billing_date_str = target_date.isoformat()
+    client = _create_client()
+
+    total_amount = 0.0
+    total_items = 0
+    currency = "CNY"
+    next_token: Optional[str] = None
+
+    try:
+        while True:
+            request = bss_models.DescribeInstanceBillRequest(
+                billing_cycle=billing_cycle,
+                billing_date=billing_date_str,
+                granularity="DAILY",
+                max_results=300,
+                next_token=next_token,
+            )
+
+            response = client.describe_instance_bill(request)
+            body = response.body
+
+            if not body.success:
+                logger.error("Alibaba daily billing API error: code=%s msg=%s",
+                             body.code, body.message)
+                break
+
+            data = body.data
+            if data and data.items:
+                for item in data.items:
+                    total_amount += float(item.pretax_amount or 0)
+                    total_items += 1
+                    if item.currency:
+                        currency = item.currency
+
+            if data and data.next_token:
+                next_token = data.next_token
+            else:
+                break
+
+    except Exception as exc:
+        logger.error("Failed to fetch Alibaba Cloud daily billing: %s", exc)
+
+    return AliyunDailyCost(
+        billing_date=billing_date_str,
+        total_pretax_amount=round(total_amount, 4),
+        total_requests=total_items,
+        currency=currency,
+    )

@@ -32,7 +32,9 @@ from src.config.settings import get_settings
 from src.database import get_db, get_redis, Account, TotpBackupCode, RefreshToken, TempToken
 from src.database.models import LlmUsageLog
 from src.services.aliyun_billing_service import get_daily_cost as aliyun_get_daily_cost
+from src.services.aliyun_billing_service import get_cost_by_date as aliyun_get_cost_by_date
 from src.services.tencent_billing_service import get_daily_cost as tencent_get_daily_cost
+from src.services.tencent_billing_service import get_cost_by_date as tencent_get_cost_by_date
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import delete_session_by_hash
 from src.utils import (
@@ -278,7 +280,7 @@ async def get_dashboard_summary(
     logs_page: Optional[int] = Query(1, ge=1, description="Logs page number (1-based)"),
     logs_per_page: Optional[int] = Query(10, ge=1, le=50, description="Logs per page (1-50)"),
     cost_model: Optional[str] = Query("chat", regex="^(chat|cv_parsing)$"),
-    cost_time_range: Optional[str] = Query("last_24h", regex="^(last_24h|last_7d|last_1m)$"),
+    cost_date: Optional[str] = Query(None, description="Date for model cost snapshot (YYYY-MM-DD), defaults to yesterday"),
     admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -309,9 +311,9 @@ async def get_dashboard_summary(
         )
     ).scalar() or 0
 
-    # ── KPI: llm_cost (yesterday, Alibaba Cloud billing delayed 24 h) ──
+    # ── KPI: llm_cost (current month cumulative) ──────────────────────
     yesterday = today - timedelta(days=1)
-    llm_cost_today = await _get_llm_cost_today(db, yesterday)
+    llm_cost_today = await _get_llm_cost_today(db, today)
 
     # ── Recent Users (3 newest) ─────────────────────────────────────────
     recent_users = await _get_recent_users(db, caller_user_type=admin.user_type, limit=3)
@@ -325,8 +327,19 @@ async def get_dashboard_summary(
     )
 
     # ── Model Cost Snapshot ─────────────────────────────────────────────
+    if cost_date:
+        try:
+            parsed_cost_date = date.fromisoformat(cost_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"message": "Invalid date format, expected YYYY-MM-DD"},
+            )
+    else:
+        parsed_cost_date = yesterday
+
     model_cost_snapshot = await _get_model_cost_snapshot(
-        db, cost_model or "chat", cost_time_range or "last_24h", now,
+        db, cost_model or "chat", parsed_cost_date,
     )
 
     return AdminDashboardSummary(
@@ -1668,28 +1681,26 @@ def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
 
 # ── Model Cost helpers ───────────────────────────────────────────────
 
-def _time_range_to_since(time_range: str, now: datetime) -> datetime:
-    """Convert a time_range enum value to a UTC datetime lower-bound."""
-    delta_map = {
-        "last_24h": timedelta(hours=24),
-        "last_7d": timedelta(days=7),
-        "last_1m": timedelta(days=30),
-    }
-    return now - delta_map.get(time_range, timedelta(hours=24))
-
-
 async def _get_model_cost_snapshot(
     db: AsyncSession,
     model: str,
-    time_range: str,
-    now: datetime,
+    target_date: date,
 ) -> ModelCostSnapshot:
-    """Aggregate llm_usage_log for the specified model + time window."""
-    since = _time_range_to_since(time_range, now)
+    """Aggregate data for the specified model on *target_date*.
+
+    Requests / latency / tokens come from the local llm_usage_log table.
+    Cost comes from the cloud billing API (Alibaba Cloud for chat,
+    Tencent Cloud for cv_parsing), falling back to local DB if no
+    cloud credentials are configured.
+    """
+    _settings = get_settings()
+    start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
 
     base_filter = [
         LlmUsageLog.source == model,
-        LlmUsageLog.created_at >= since,
+        LlmUsageLog.created_at >= start,
+        LlmUsageLog.created_at < end,
     ]
 
     # total_requests
@@ -1713,18 +1724,32 @@ async def _get_model_cost_snapshot(
         )
     ).scalar() or 0
 
-    # estimated_cost — total_price is stored as String, cast to numeric
-    cost_raw = (
-        await db.execute(
-            select(func.sum(func.cast(LlmUsageLog.total_price, Numeric)))
-            .where(*base_filter)
-        )
-    ).scalar()
-    cost_amount = round(float(cost_raw), 4) if cost_raw else 0.0
+    # ── Cost + requests: prefer cloud billing API, fall back to local DB ─
+    cost_amount = 0.0
+    currency = "CNY"
+
+    if model == "chat" and _settings.aliyun_access_key_id and _settings.aliyun_access_key_secret:
+        cloud_cost = await aliyun_get_cost_by_date(target_date)
+        cost_amount = cloud_cost.total_pretax_amount
+        total_requests = cloud_cost.total_requests
+        currency = cloud_cost.currency
+    elif model == "cv_parsing" and _settings.tencent_secret_id and _settings.tencent_secret_key:
+        cloud_cost = await tencent_get_cost_by_date(target_date)
+        cost_amount = cloud_cost.total_real_cost
+        total_requests = cloud_cost.total_items
+    else:
+        # Fallback: local DB
+        cost_raw = (
+            await db.execute(
+                select(func.sum(func.cast(LlmUsageLog.total_price, Numeric)))
+                .where(*base_filter)
+            )
+        ).scalar()
+        cost_amount = round(float(cost_raw), 4) if cost_raw else 0.0
 
     return ModelCostSnapshot(
         total_requests=total_requests,
         avg_latency_seconds=avg_latency,
         tokens_total=tokens_total,
-        estimated_cost=Money(currency="USD", amount=cost_amount),
+        estimated_cost=Money(currency=currency, amount=round(cost_amount, 4)),
     )
