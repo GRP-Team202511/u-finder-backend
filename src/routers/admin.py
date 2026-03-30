@@ -32,6 +32,7 @@ from src.config.settings import get_settings
 from src.database import get_db, get_redis, Account, TotpBackupCode, RefreshToken, TempToken
 from src.database.models import LlmUsageLog
 from src.services.aliyun_billing_service import get_daily_cost as aliyun_get_daily_cost
+from src.services.tencent_billing_service import get_daily_cost as tencent_get_daily_cost
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import delete_session_by_hash
 from src.utils import (
@@ -614,20 +615,34 @@ async def _get_llm_cost_today(db: AsyncSession, target_date: date) -> LlmCostTod
     """Fetch LLM cost for *target_date*.
 
     Strategy:
-    1. If Alibaba Cloud credentials are configured, call the billing API.
-    2. Otherwise fall back to the local llm_usage_log table.
+    1. Query configured cloud billing APIs (Alibaba Cloud for chat,
+       Tencent Cloud for CV parsing) and sum their costs.
+    2. If neither is configured, fall back to the local llm_usage_log table.
 
-    Alibaba Cloud billing data is delayed ~24 h, so the caller typically
+    Cloud billing data is delayed ~24 h, so the caller typically
     passes yesterday's date.
     """
     settings = get_settings()
 
-    # ── Primary: Alibaba Cloud billing API ──────────────────────────────
-    if settings.aliyun_access_key_id and settings.aliyun_access_key_secret:
-        cost = await aliyun_get_daily_cost(target_date)
+    has_aliyun = bool(settings.aliyun_access_key_id and settings.aliyun_access_key_secret)
+    has_tencent = bool(settings.tencent_secret_id and settings.tencent_secret_key)
+
+    if has_aliyun or has_tencent:
+        total_amount = 0.0
+        currency = "CNY"
+
+        if has_aliyun:
+            aliyun_cost = await aliyun_get_daily_cost(target_date)
+            total_amount += aliyun_cost.total_pretax_amount
+            currency = aliyun_cost.currency
+
+        if has_tencent:
+            tencent_cost = await tencent_get_daily_cost(target_date)
+            total_amount += tencent_cost.total_real_cost
+
         return LlmCostToday(
-            currency=cost.currency,
-            amount=cost.total_pretax_amount,
+            currency=currency,
+            amount=round(total_amount, 4),
             budget_per_day=None,
         )
 

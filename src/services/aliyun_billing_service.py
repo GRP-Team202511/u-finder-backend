@@ -43,19 +43,18 @@ def _create_client() -> BssOpenApiClient:
 
 async def get_daily_cost(
     target_date: date,
-    product_code: Optional[str] = None,
 ) -> AliyunDailyCost:
     """
-    Query Alibaba Cloud DescribeInstanceBill for a specific day.
+    Query Alibaba Cloud DescribeInstanceBill for the month containing *target_date*.
+
+    Only ``BillingCycle`` (YYYY-MM) is sent to the API; the response
+    contains all items for that billing month.
 
     Args:
-        target_date: The billing date to query (YYYY-MM-DD).
-                     Must be at least 24 hours ago for data to be available.
-        product_code: Alibaba Cloud product code to filter (e.g. "bailian").
-                      Defaults to the value from settings.
+        target_date: A date within the billing month to query.
 
     Returns:
-        AliyunDailyCost with aggregated totals for that day.
+        AliyunDailyCost with aggregated totals for the billing month.
     """
     if not settings.aliyun_access_key_id or not settings.aliyun_access_key_secret:
         logger.warning("Alibaba Cloud credentials not configured, returning zero cost")
@@ -66,7 +65,6 @@ async def get_daily_cost(
             currency="CNY",
         )
 
-    product = product_code or settings.aliyun_billing_product_code
     billing_cycle = target_date.strftime("%Y-%m")
     billing_date_str = target_date.isoformat()
 
@@ -81,10 +79,6 @@ async def get_daily_cost(
         while True:
             request = bss_models.DescribeInstanceBillRequest(
                 billing_cycle=billing_cycle,
-                billing_date=billing_date_str,
-                granularity="DAILY",
-                product_code=product,
-                is_hide_zero_charge=True,
                 max_results=300,
                 next_token=next_token,
             )

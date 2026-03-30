@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     aliyun_access_key_secret: str = ""
     aliyun_billing_product_code: str = "bailian"  # 百炼 (AI services)
 
+    # Tencent Cloud Billing Settings
+    tencent_secret_id: str = ""
+    tencent_secret_key: str = ""
+    tencent_billing_product_code: str = ""  # e.g. p_hunyuanturbo
+
     # CV Upload Settings
     cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB
 
