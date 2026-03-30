@@ -31,6 +31,7 @@ from src.config.logger import get_logger
 from src.config.settings import get_settings
 from src.database import get_db, get_redis, Account, TotpBackupCode, RefreshToken, TempToken
 from src.database.models import LlmUsageLog
+from src.services.aliyun_billing_service import get_daily_cost as aliyun_get_daily_cost
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import delete_session_by_hash
 from src.utils import (
@@ -610,11 +611,27 @@ def _cleanup_avatar_files(user_id: int) -> None:
         shutil.rmtree(avatar_dir, ignore_errors=True)
 
 async def _get_llm_cost_today(db: AsyncSession, target_date: date) -> LlmCostToday:
-    """SUM(total_price) from llm_usage_log for *target_date*.
+    """Fetch LLM cost for *target_date*.
+
+    Strategy:
+    1. If Alibaba Cloud credentials are configured, call the billing API.
+    2. Otherwise fall back to the local llm_usage_log table.
 
     Alibaba Cloud billing data is delayed ~24 h, so the caller typically
     passes yesterday's date.
     """
+    settings = get_settings()
+
+    # ── Primary: Alibaba Cloud billing API ──────────────────────────────
+    if settings.aliyun_access_key_id and settings.aliyun_access_key_secret:
+        cost = await aliyun_get_daily_cost(target_date)
+        return LlmCostToday(
+            currency=cost.currency,
+            amount=cost.total_pretax_amount,
+            budget_per_day=None,
+        )
+
+    # ── Fallback: local DB ──────────────────────────────────────────────
     start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
 

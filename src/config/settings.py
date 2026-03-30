@@ -100,6 +100,11 @@ class Settings(BaseSettings):
             )
         return self
 
+    # Alibaba Cloud Billing Settings
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_billing_product_code: str = "bailian"  # 百炼 (AI services)
+
     # CV Upload Settings
     cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB
 
