@@ -307,8 +307,9 @@ async def get_dashboard_summary(
         )
     ).scalar() or 0
 
-    # ── KPI: llm_cost_today ─────────────────────────────────────────────
-    llm_cost_today = await _get_llm_cost_today(db, today)
+    # ── KPI: llm_cost (yesterday, Alibaba Cloud billing delayed 24 h) ──
+    yesterday = today - timedelta(days=1)
+    llm_cost_today = await _get_llm_cost_today(db, yesterday)
 
     # ── Recent Users (3 newest) ─────────────────────────────────────────
     recent_users = await _get_recent_users(db, caller_user_type=admin.user_type, limit=3)
@@ -608,9 +609,13 @@ def _cleanup_avatar_files(user_id: int) -> None:
     if avatar_dir.is_dir():
         shutil.rmtree(avatar_dir, ignore_errors=True)
 
-async def _get_llm_cost_today(db: AsyncSession, today: date) -> LlmCostToday:
-    """SUM(total_price) from llm_usage_log where created_at::date = today."""
-    start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+async def _get_llm_cost_today(db: AsyncSession, target_date: date) -> LlmCostToday:
+    """SUM(total_price) from llm_usage_log for *target_date*.
+
+    Alibaba Cloud billing data is delayed ~24 h, so the caller typically
+    passes yesterday's date.
+    """
+    start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
 
     result = await db.execute(
