@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Router tests for GET /profile/avatar, PUT /profile/avatar, and DELETE /profile/avatar
 

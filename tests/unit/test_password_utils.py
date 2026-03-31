@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Unit tests for src/utils/password_utils.py
 Tests password hashing, verification, and token hashing.

@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Tencent Cloud Billing Service
 Fetches LLM cost data from Tencent Cloud DescribeBillDetail API.

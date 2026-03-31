@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Chat router module
 Provides the SSE streaming chat endpoint that proxies Dify agent responses.

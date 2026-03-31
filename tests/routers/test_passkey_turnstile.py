@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Router tests for Turnstile enforcement on POST /auth/passkey/login/options.
 This endpoint is unauthenticated, so Turnstile is critical.

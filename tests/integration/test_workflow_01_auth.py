@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Integration tests for Authentication Flows.
 Tests run against REAL Database and Redis connections but with strict Rollback isolations.

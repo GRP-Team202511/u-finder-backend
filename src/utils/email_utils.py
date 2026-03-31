@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Email utility module
 Handles sending emails for verification codes and notifications

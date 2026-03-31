@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Router tests for Turnstile enforcement on auth endpoints.
 Verifies that login, signup, and reset properly gate on Turnstile

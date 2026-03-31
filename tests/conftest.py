@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Global pytest configuration and fixtures.
 - Uses a standalone test app (no real DB/Redis connections triggered)

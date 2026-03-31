@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Passkey (WebAuthn/FIDO2) router module
 Provides registration and passwordless login via FIDO2-compliant authenticators.
