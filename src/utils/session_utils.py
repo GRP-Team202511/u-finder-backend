@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Redis session utility functions
 Handles all Redis-based session operations for refresh token caching.

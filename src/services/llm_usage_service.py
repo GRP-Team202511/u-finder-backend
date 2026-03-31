@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 LLM Usage Service
 Persists per-request Dify usage data to the llm_usage_log table.

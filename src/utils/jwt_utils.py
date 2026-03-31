@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 JWT utility functions
 Handles JWT token generation and verification

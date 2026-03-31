@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Settings and configuration module
 Loads and manages environment variables using pydantic

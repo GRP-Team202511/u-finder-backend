@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """Models module - placeholder for backwards compatibility
 
 All models have been moved to src.database.models

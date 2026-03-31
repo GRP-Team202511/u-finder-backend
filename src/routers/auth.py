@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Authentication router module
 Contains authentication related endpoints such as user login

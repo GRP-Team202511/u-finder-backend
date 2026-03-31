@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Unit tests for src/utils/jwt_utils.py
 Tests JWT creation/verification and helper token generators.

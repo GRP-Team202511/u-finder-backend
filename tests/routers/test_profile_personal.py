@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Router tests for GET /profile/personal and PUT /profile/personal
 

@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Reusable response validators for router tests.
 Each helper strictly enforces the schema described in auth.openapi.json.
