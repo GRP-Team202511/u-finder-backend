@@ -1667,9 +1667,7 @@ def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
             if level != "all" and normalised != level:
                 continue
 
-            ts = datetime.strptime(m.group("datetime"), "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=timezone.utc
-            )
+            ts = datetime.strptime(m.group("datetime"), "%Y-%m-%d %H:%M:%S")
             entries.append(
                 LogEntry(time=ts, level=normalised, message=m.group("message"))
             )
