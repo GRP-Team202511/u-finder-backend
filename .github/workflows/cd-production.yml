@@ -114,8 +114,23 @@ jobs:
             echo "$REGISTRY_PASSWORD" | docker login ghcr.io -u "$REGISTRY_USERNAME" --password-stdin
             export UFINDER_IMAGE="$IMAGE_REF"
             docker compose -f docker-compose.prod.yml pull backend
-            docker compose -f docker-compose.prod.yml stop backend || true
-            docker compose -f docker-compose.prod.yml rm -f backend || true
+            docker compose -f docker-compose.prod.yml down --remove-orphans || true
+
+            PORT="${SERVER_PORT:-8000}"
+            if command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+              echo "Port $PORT is still in use before startup."
+              lsof -iTCP:"$PORT" -sTCP:LISTEN || true
+              if command -v fuser >/dev/null 2>&1; then
+                fuser -k "$PORT"/tcp || true
+                sleep 2
+              fi
+            fi
+
+            if command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+              echo "Port $PORT remains occupied after cleanup. Aborting deployment."
+              lsof -iTCP:"$PORT" -sTCP:LISTEN || true
+              exit 1
+            fi
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
             max_retries=15
