@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 import uuid
 
 from sqlalchemy import Column, BigInteger, String, DateTime, Boolean, SmallInteger, Text, ForeignKey, Index
@@ -72,7 +73,7 @@ class RefreshToken(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True, nullable=False)
     user_id = Column(BigInteger, ForeignKey("account.user_id", ondelete="CASCADE"), nullable=False)
     token_hashed = Column(String(500), nullable=False)
-    user_agent = Column(String(100), nullable=False)
+    user_agent = Column(String(512), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     expire_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now() + interval '30 days'"))
 

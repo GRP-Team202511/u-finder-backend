@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 import pytest
 from unittest.mock import patch, MagicMock
 

@@ -1,0 +1,130 @@
+name: CD Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref: ${{ steps.publish.outputs.image_ref }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare image metadata
+        id: prep
+        run: |
+          image="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          sha_tag="sha-${GITHUB_SHA::7}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.prep.outputs.image }}:staging
+            ${{ steps.prep.outputs.image }}:${{ steps.prep.outputs.sha_tag }}
+
+      - name: Export immutable image reference
+        id: publish
+        run: echo "image_ref=${{ steps.prep.outputs.image }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Write deployment environment file
+        run: |
+          cat <<'EOF' > .env.deploy
+          ${{ secrets.DEPLOY_ENV_FILE }}
+          EOF
+          chmod 644 .env.deploy
+
+      - name: Copy deployment assets to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USERNAME }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: docker-compose.prod.yml,docker/db/init.sql,.env.deploy
+          target: ${{ secrets.DEPLOY_PATH }}
+
+      - name: Deploy staging release
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_REF: ${{ needs.build-and-push.outputs.image_ref }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USERNAME }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          envs: IMAGE_REF,HEALTHCHECK_URL,DEPLOY_PATH,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          script: |
+            set -e
+            mkdir -p "$DEPLOY_PATH"
+            cd "$DEPLOY_PATH"
+            mv -f .env.deploy .env
+            chmod 600 .env
+            echo "$REGISTRY_PASSWORD" | docker login ghcr.io -u "$REGISTRY_USERNAME" --password-stdin
+            export UFINDER_IMAGE="$IMAGE_REF"
+            docker compose -f docker-compose.prod.yml pull backend
+            docker compose -f docker-compose.prod.yml stop backend || true
+            docker compose -f docker-compose.prod.yml rm -f backend || true
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            max_retries=15
+            wait_seconds=4
+            for attempt in $(seq 1 "$max_retries"); do
+              echo "Health check attempt ${attempt}/${max_retries}..."
+              if curl -fsS "$HEALTHCHECK_URL"; then
+                echo "Backend is healthy."
+                exit 0
+              fi
+              if [ "$attempt" -lt "$max_retries" ]; then
+                echo "Backend not ready yet, waiting ${wait_seconds}s..."
+                sleep "$wait_seconds"
+              fi
+            done
+
+            echo "Health check failed after ${max_retries} attempts."
+            docker compose -f docker-compose.prod.yml ps
+            docker compose -f docker-compose.prod.yml logs backend --tail=200
+            exit 1

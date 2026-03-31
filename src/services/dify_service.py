@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Dify API service module
 Handles communication with the Dify AI platform via SSE streaming

@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Passkey (WebAuthn/FIDO2) related Pydantic models
 """
@@ -32,6 +33,7 @@ class PasskeyRegisterVerifyResponse(BaseModel):
 # ============ Login Options ============
 class PasskeyLoginOptionsRequest(BaseModel):
     email: EmailStr
+    turnstile_token: str = ""
 
 
 class PasskeyLoginOptionsResponse(BaseModel):

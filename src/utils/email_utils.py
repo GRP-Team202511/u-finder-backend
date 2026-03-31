@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Email utility module
 Handles sending emails for verification codes and notifications
@@ -92,6 +93,8 @@ def _get_email_subject(email_type: str) -> str:
         return "Welcome to U-Finder - Verify Your Email"
     elif email_type == "reset":
         return "U-Finder - Password Reset Code"
+    elif email_type == "delete":
+        return "U-Finder - Account Deletion Verification"
     else:
         return "U-Finder - Verification Code"
 
@@ -109,6 +112,23 @@ Your verification code is: {verification_code}
 This code will expire in 5 minutes. Please enter this code to complete your registration.
 
 If you didn't sign up for U-Finder, please ignore this email.
+
+Best regards,
+The U-Finder Team
+"""
+    elif email_type == "delete":
+        return f"""
+Hello {name},
+
+We received a request to permanently delete your U-Finder account.
+
+Your verification code is: {verification_code}
+
+This code will expire in 5 minutes. Please enter this code to confirm account deletion.
+
+Warning: This action is irreversible. Once confirmed, your account and all associated data will be permanently deleted.
+
+If you did not request account deletion, please ignore this email and your account will remain safe.
 
 Best regards,
 The U-Finder Team
@@ -135,6 +155,7 @@ async def _get_html_content(verification_code: str, name: str, email_type: str) 
     template_file_map = {
         "signup": "verification-email.html",
         "reset": "resetpassword-email.html",
+        "delete": "delete-account-email.html",
     }
     template_name = template_file_map.get(email_type)
     if template_name:
@@ -158,6 +179,10 @@ def _get_fallback_html_content(verification_code: str, name: str, email_type: st
         title = "Welcome to U-Finder!"
         message = "Thank you for signing up. Please use the verification code below to complete your registration."
         expiry = "This code will expire in 5 minutes."
+    elif email_type == "delete":
+        title = "Delete Your Account"
+        message = "We received a request to permanently delete your U-Finder account. Please use the verification code below to confirm this action."
+        expiry = "This code will expire in 5 minutes. Warning: this action is irreversible."
     else:  # reset
         title = "Password Reset Request"
         message = "We received a request to reset your password. Please use the code below to proceed."

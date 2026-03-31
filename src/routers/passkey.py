@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Passkey (WebAuthn/FIDO2) router module
 Provides registration and passwordless login via FIDO2-compliant authenticators.
@@ -8,7 +9,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -48,7 +49,8 @@ from src.schemas.passkey import (
 from src.utils.auth_deps import get_current_user_id
 from src.utils.password_utils import hash_token
 from src.utils.jwt_utils import create_temp_token
-from src.utils.session_utils import save_session
+from src.utils.session_utils import normalize_user_agent, save_session
+from src.utils.turnstile import verify_turnstile_token
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -279,10 +281,15 @@ async def passkey_register_verify(
 )
 async def passkey_login_options(
     body: PasskeyLoginOptionsRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
 ):
     try:
+        # Cloudflare Turnstile verification
+        client_ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else None)
+        await verify_turnstile_token(body.turnstile_token, client_ip)
+
         email = body.email.lower()
 
         result = await db.execute(
@@ -460,10 +467,11 @@ async def passkey_login_verify(
         # Create session (same as normal login)
         refresh_token = create_temp_token()
         token_hashed = hash_token(refresh_token)
+        normalized_user_agent = normalize_user_agent(user_agent)
         refresh_token_record = RefreshToken(
             user_id=account.user_id,
             token_hashed=token_hashed,
-            user_agent=user_agent[:100],
+            user_agent=normalized_user_agent,
             expire_at=datetime.now(timezone.utc) + timedelta(days=30),
         )
         db.add(refresh_token_record)
@@ -473,7 +481,7 @@ async def passkey_login_verify(
             redis,
             token=refresh_token,
             user_id=account.user_id,
-            user_agent=user_agent[:100],
+            user_agent=normalized_user_agent,
         )
 
         # Clean up the challenge

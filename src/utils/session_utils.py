@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Redis session utility functions
 Handles all Redis-based session operations for refresh token caching.
@@ -21,6 +22,7 @@ logger = get_logger(__name__)
 
 # 30 days in seconds — matches refresh_token.expire_at default
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60  # 2592000
+MAX_USER_AGENT_LENGTH = 512
 
 # A small buffer so the index set outlives individual session keys
 _INDEX_TTL_SECONDS = SESSION_TTL_SECONDS + 24 * 60 * 60  # 31 days
@@ -33,6 +35,13 @@ def _session_key(token: str) -> str:
 
 def _user_index_key(user_id: int) -> str:
     return f"user_sessions:{user_id}"
+
+
+def normalize_user_agent(user_agent: Optional[str]) -> str:
+    """Keep a bounded raw user-agent string for storage and display."""
+    if not user_agent:
+        return "Unknown"
+    return user_agent[:MAX_USER_AGENT_LENGTH]
 
 
 async def save_session(
@@ -59,6 +68,7 @@ async def save_session(
         digest = hash_token(token)
         session_key = f"session:{digest}"
         index_key = _user_index_key(user_id)
+        normalized_user_agent = normalize_user_agent(user_agent)
 
         pipe = redis.pipeline()
         # Store session data — only non-secret fields
@@ -66,7 +76,7 @@ async def save_session(
             session_key,
             mapping={
                 "user_id": str(user_id),
-                "user_agent": user_agent,
+                "user_agent": normalized_user_agent,
             },
         )
         pipe.expire(session_key, ttl_seconds)

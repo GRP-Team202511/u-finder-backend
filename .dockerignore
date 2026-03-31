@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Tests
+tests/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Docs & scripts
+docs/
+scripts/
+README.md
+pytest.ini
+
+# Env files (secrets should not be baked into image)
+.env
+.env.*
+
+# Logs & uploads (mounted as volumes at runtime)
+logs/
+uploads/
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Unit tests for src/schemas/auth.py
 Tests Pydantic schema validation rules (no DB/network required).

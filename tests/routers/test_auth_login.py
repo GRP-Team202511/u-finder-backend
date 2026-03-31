@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Router tests for POST /auth/login
 """
@@ -39,6 +40,10 @@ def _make_user(
 
 LOGIN_URL = "/auth/login"
 VALID_PAYLOAD = {"email": "test@example.com", "password": "Password1"}
+LONG_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 26_3_1 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3.1 Mobile/15E148 Safari/604.1"
+)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -136,3 +141,21 @@ class TestLogin:
         assert_login_200(body)
         assert body["id"] == user.user_id
         assert body["name"] == user.user_name
+
+    @patch("src.routers.auth.save_session", new_callable=AsyncMock)
+    async def test_login_preserves_full_user_agent(self, mock_save_session, client, mock_db):
+        """A long User-Agent should be stored and cached without the old 100-char truncation."""
+        user = _make_user()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = user
+
+        response = await client.post(
+            LOGIN_URL,
+            json=VALID_PAYLOAD,
+            headers={"User-Agent": LONG_USER_AGENT},
+        )
+
+        assert response.status_code == 200
+        saved_token = mock_db.add.call_args.args[0]
+        assert saved_token.user_agent == LONG_USER_AGENT
+        assert len(saved_token.user_agent) > 100
+        assert mock_save_session.await_args.kwargs["user_agent"] == LONG_USER_AGENT

@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Two-Factor Authentication router module.
 
@@ -54,6 +55,7 @@ from src.utils import (
     decrypt_secret,
     generate_backup_codes,
     check_totp_replay,
+    normalize_user_agent,
 )
 from src.utils.auth_deps import get_current_user_id
 from src.utils.session_utils import save_session
@@ -313,10 +315,11 @@ async def verify_2fa(
 
     # 2FA passed – create refresh token (same as normal login)
     refresh_token = create_temp_token()
+    normalized_user_agent = normalize_user_agent(user_agent)
     refresh_token_record = RefreshToken(
         user_id=user.user_id,
         token_hashed=hash_token(refresh_token),
-        user_agent=user_agent[:100],
+        user_agent=normalized_user_agent,
         expire_at=datetime.now(timezone.utc) + timedelta(days=30),
     )
     db.add(refresh_token_record)
@@ -328,7 +331,7 @@ async def verify_2fa(
         redis,
         token=refresh_token,
         user_id=user.user_id,
-        user_agent=user_agent[:100],
+        user_agent=normalized_user_agent,
     )
 
     logger.info(f"2FA verification successful for user_id={user.user_id}")

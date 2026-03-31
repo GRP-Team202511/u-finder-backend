@@ -41,10 +41,12 @@ U-Finder 後端是一個基於 FastAPI 和 Python 3.12 建構的非同步 RESTfu
 - **履歷上傳與 AI 解析** - 上傳 PDF/DOCX，透過 Dify AI 工作流程解析並回傳結構化資料
 - **AI 聊天 (SSE 串流傳輸)** - 即時串流聊天代理，注入使用者資料以提供個人化大學推薦
 - **收藏大學項目** - 查看、收藏、取消收藏，支援兩級去重（URL + 標準化名稱）
-- **管理員儀表板** - 基於 JWT 的管理員認證、使用者 KPI、LLM 成本監控、系統日誌預覽和使用者管理（封鎖/解除封鎖/刪除）
+- **管理員儀表板** - 基於 JWT 的管理員認證（含超級管理員角色）、使用者 KPI、LLM 成本監控（阿里雲和騰訊雲計費）、系統日誌預覽（支援分頁）和使用者管理（封鎖/解除封鎖/刪除）
 - **LLM 用量記錄** - 按請求記錄 Token 和成本，涵蓋聊天與履歷解析工作流程
 - **背景清理** - 每小時自動清理過期權杖和失效 Redis 工作階段
-- **基於角色的存取控制** - 三種使用者類型：學生 (1)、機構 (2)、管理員 (3)
+- **反機器人保護** - 整合 Cloudflare Turnstile，保護註冊、登入和密碼重設端點
+- **雲服務計費監控** - 阿里雲和騰訊雲 API 費用追蹤，用於管理員儀表板
+- **基於角色的存取控制** - 四種使用者類型：學生 (1)、機構 (2)、管理員 (3)、超級管理員 (4)
 
 ## 技術棧
 
@@ -62,7 +64,9 @@ U-Finder 後端是一個基於 FastAPI 和 Python 3.12 建構的非同步 RESTfu
 - **影像處理**: [Pillow](https://pillow.readthedocs.io/) + [pillow-heif](https://github.com/bigcat88/pillow_heif) - 頭像處理，支援 HEIC/HEIF 格式
 - **資料驗證**: [Pydantic](https://docs.pydantic.dev/) 2.12 + [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) - 資料驗證與環境配置
 - **測試**: [pytest](https://docs.pytest.org/) + [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) + [pytest-cov](https://github.com/pytest-dev/pytest-cov) + [httpx](https://www.python-httpx.org/)（ASGITransport）
-- **CI/CD**: [GitHub Actions](https://github.com/features/actions) - 推送/PR 時自動執行測試
+- **CI/CD**: [GitHub Actions](https://github.com/features/actions) - 推送/PR 時自動執行測試，CD 測試環境與正式環境部署
+- **容器化**: [Docker](https://www.docker.com/) + [Docker Compose](https://docs.docker.com/compose/) - 容器化部署，包含 PostgreSQL 和 Redis
+- **反機器人**: [Cloudflare Turnstile](https://www.cloudflare.com/products/turnstile/) - 認證端點的機器人防護
 
 ## 快速開始
 
@@ -180,7 +184,9 @@ backend/
 │   ├── services/
 │   │   ├── dify_service.py      # Dify AI API 整合（聊天、履歷解析、回饋）
 │   │   ├── university_service.py # 大學項目去重
-│   │   └── llm_usage_service.py # LLM 用量與成本記錄
+│   │   ├── llm_usage_service.py # LLM 用量與成本記錄
+│   │   ├── aliyun_billing_service.py  # 阿里雲計費 API
+│   │   └── tencent_billing_service.py # 騰訊雲計費 API
 │   ├── utils/
 │   │   ├── jwt_utils.py         # JWT 建立、驗證、臨時權杖
 │   │   ├── password_utils.py    # bcrypt 雜湊、HMAC-SHA256 權杖雜湊
@@ -188,11 +194,13 @@ backend/
 │   │   ├── email_utils.py       # 非同步 SMTP 電子郵件與 HTML 範本
 │   │   ├── session_utils.py     # Redis 工作階段 CRUD（Cache-Aside 模式）
 │   │   ├── auth_deps.py         # 共用認證相依性（get_current_user_id）
-│   │   └── cleanup.py           # 過期權杖清理工具
+│   │   ├── cleanup.py           # 過期權杖清理工具
+│   │   └── turnstile.py         # Cloudflare Turnstile 驗證
 │   └── templates/
 │       └── emails/              # HTML 電子郵件範本
 │           ├── verification-email.html
-│           └── resetpassword-email.html
+│           ├── resetpassword-email.html
+│           └── delete-account-email.html
 ├── tests/
 │   ├── conftest.py              # 測試固定裝置、Mock DB/Redis、假資料工廠
 │   ├── unit/                    # 單元測試（工具類、Schema、服務）
@@ -202,9 +210,18 @@ backend/
 │   └── integration/             # 端到端工作流程測試
 ├── scripts/
 │   └── test_2fa_manual.py       # 手動 2FA 生命週期測試腳本
+├── docker/
+│   └── db/
+│       └── init.sql             # PostgreSQL 架構初始化
 ├── .github/
 │   └── workflows/
-│       └── ci.yml               # GitHub Actions CI 流水線
+│       ├── ci.yml               # GitHub Actions CI 流水線
+│       ├── cd-staging.yml       # CD 測試環境部署
+│       ├── cd-production.yml    # CD 正式環境部署
+│       └── docker-build.yml     # Docker 映像建置工作流
+├── Dockerfile                   # 正式環境 Docker 映像
+├── docker-compose.yml           # 本地開發服務
+├── docker-compose.prod.yml      # 正式環境 Docker Compose
 ├── .env.example                 # 環境變數範本
 ├── requirements.txt             # Python 相依套件
 ├── pytest.ini                   # pytest 配置

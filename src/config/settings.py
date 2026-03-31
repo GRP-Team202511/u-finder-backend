@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Settings and configuration module
 Loads and manages environment variables using pydantic
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     # Database Settings
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/dbname"
     db_drop_all_on_startup: bool = False
+    db_run_startup_ddl: bool = False
 
     # API Keys & Secrets
     secret_key: str = "your-secret-key-change-in-production"
@@ -72,6 +74,10 @@ class Settings(BaseSettings):
     # 2FA / TOTP Settings
     totp_encryption_key: str = ""  # Base64-encoded 32-byte AES-256 key
 
+    # Cloudflare Turnstile Settings
+    turnstile_secret_key: str = ""
+    turnstile_enabled: bool = False  # Enable in production
+
     # Passkey / WebAuthn Settings
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "U-Finder"
@@ -94,6 +100,16 @@ class Settings(BaseSettings):
                 f'python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"'
             )
         return self
+
+    # Alibaba Cloud Billing Settings
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_billing_product_code: str = "bailian"  # 百炼 (AI services)
+
+    # Tencent Cloud Billing Settings
+    tencent_secret_id: str = ""
+    tencent_secret_key: str = ""
+    tencent_billing_product_code: str = ""  # e.g. p_hunyuanturbo
 
     # CV Upload Settings
     cv_max_file_size: int = 10 * 1024 * 1024  # 10 MB

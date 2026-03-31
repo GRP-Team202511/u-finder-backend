@@ -1,3 +1,5 @@
+# This code was completed by GRP Team 2025.11.
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from typing import AsyncGenerator
@@ -53,6 +55,25 @@ async def init_db():
             if settings.is_development and settings.db_drop_all_on_startup:
                 await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
+            if settings.db_run_startup_ddl:
+                await conn.execute(text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1
+                            FROM information_schema.columns
+                            WHERE table_schema = 'public'
+                              AND table_name = 'refresh_token'
+                              AND column_name = 'user_agent'
+                              AND character_maximum_length IS NOT NULL
+                              AND character_maximum_length < 512
+                        ) THEN
+                            ALTER TABLE public.refresh_token
+                            ALTER COLUMN user_agent TYPE VARCHAR(512);
+                        END IF;
+                    END
+                    $$;
+                """))
     except Exception as e:
         # Re-raise the exception to be handled by the caller
         raise Exception(f"Failed to initialize database: {str(e)}")

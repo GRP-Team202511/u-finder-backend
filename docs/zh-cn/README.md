@@ -41,10 +41,12 @@ U-Finder 后端是一个基于 FastAPI 和 Python 3.12 构建的异步 RESTful A
 - **简历上传与 AI 解析** - 上传 PDF/DOCX，通过 Dify AI 工作流解析并返回结构化资料数据
 - **AI 聊天 (SSE 流式传输)** - 实时流式聊天代理，注入用户资料以提供个性化大学推荐
 - **收藏大学项目** - 查看、收藏、取消收藏，支持两级去重（URL + 标准化名称）
-- **管理员仪表盘** - 基于 JWT 的管理员认证、用户 KPI、LLM 成本监控、系统日志预览和用户管理（封禁/解封/删除）
+- **管理员仪表盘** - 基于 JWT 的管理员认证（含超级管理员角色）、用户 KPI、LLM 成本监控（阿里云和腾讯云计费）、系统日志预览（支持分页）和用户管理（封禁/解封/删除）
 - **LLM 用量记录** - 按请求记录 Token 和成本，覆盖聊天与简历解析工作流
 - **后台清理** - 每小时自动清理过期令牌和失效 Redis 会话
-- **基于角色的访问控制** - 三种用户类型：学生 (1)、机构 (2)、管理员 (3)
+- **反机器人保护** - 集成 Cloudflare Turnstile，保护注册、登录和密码重置端点
+- **云服务计费监控** - 阿里云和腾讯云 API 费用追踪，用于管理员仪表盘
+- **基于角色的访问控制** - 四种用户类型：学生 (1)、机构 (2)、管理员 (3)、超级管理员 (4)
 
 ## 技术栈
 
@@ -62,7 +64,9 @@ U-Finder 后端是一个基于 FastAPI 和 Python 3.12 构建的异步 RESTful A
 - **图像处理**: [Pillow](https://pillow.readthedocs.io/) + [pillow-heif](https://github.com/bigcat88/pillow_heif) - 头像处理，支持 HEIC/HEIF 格式
 - **数据验证**: [Pydantic](https://docs.pydantic.dev/) 2.12 + [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) - 数据验证与环境配置
 - **测试**: [pytest](https://docs.pytest.org/) + [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) + [pytest-cov](https://github.com/pytest-dev/pytest-cov) + [httpx](https://www.python-httpx.org/)（ASGITransport）
-- **CI/CD**: [GitHub Actions](https://github.com/features/actions) - 推送/PR 时自动运行测试
+- **CI/CD**: [GitHub Actions](https://github.com/features/actions) - 推送/PR 时自动运行测试，CD 测试环境与生产环境部署
+- **容器化**: [Docker](https://www.docker.com/) + [Docker Compose](https://docs.docker.com/compose/) - 容器化部署，包含 PostgreSQL 和 Redis
+- **反机器人**: [Cloudflare Turnstile](https://www.cloudflare.com/products/turnstile/) - 认证端点的机器人防护
 
 ## 快速开始
 
@@ -180,7 +184,9 @@ backend/
 │   ├── services/
 │   │   ├── dify_service.py      # Dify AI API 集成（聊天、简历解析、反馈）
 │   │   ├── university_service.py # 大学项目去重
-│   │   └── llm_usage_service.py # LLM 用量与成本记录
+│   │   ├── llm_usage_service.py # LLM 用量与成本记录
+│   │   ├── aliyun_billing_service.py  # 阿里云计费 API
+│   │   └── tencent_billing_service.py # 腾讯云计费 API
 │   ├── utils/
 │   │   ├── jwt_utils.py         # JWT 创建、验证、临时令牌
 │   │   ├── password_utils.py    # bcrypt 哈希、HMAC-SHA256 令牌哈希
@@ -188,11 +194,13 @@ backend/
 │   │   ├── email_utils.py       # 异步 SMTP 邮件与 HTML 模板
 │   │   ├── session_utils.py     # Redis 会话 CRUD（Cache-Aside 模式）
 │   │   ├── auth_deps.py         # 共享认证依赖（get_current_user_id）
-│   │   └── cleanup.py           # 过期令牌清理工具
+│   │   ├── cleanup.py           # 过期令牌清理工具
+│   │   └── turnstile.py         # Cloudflare Turnstile 验证
 │   └── templates/
 │       └── emails/              # HTML 邮件模板
 │           ├── verification-email.html
-│           └── resetpassword-email.html
+│           ├── resetpassword-email.html
+│           └── delete-account-email.html
 ├── tests/
 │   ├── conftest.py              # 测试夹具、Mock DB/Redis、假数据工厂
 │   ├── unit/                    # 单元测试（工具类、Schema、服务）
@@ -202,9 +210,18 @@ backend/
 │   └── integration/             # 端到端工作流测试
 ├── scripts/
 │   └── test_2fa_manual.py       # 手动 2FA 生命周期测试脚本
+├── docker/
+│   └── db/
+│       └── init.sql             # PostgreSQL 架构初始化
 ├── .github/
 │   └── workflows/
-│       └── ci.yml               # GitHub Actions CI 流水线
+│       ├── ci.yml               # GitHub Actions CI 流水线
+│       ├── cd-staging.yml       # CD 测试环境部署
+│       ├── cd-production.yml    # CD 生产环境部署
+│       └── docker-build.yml     # Docker 镜像构建工作流
+├── Dockerfile                   # 生产环境 Docker 镜像
+├── docker-compose.yml           # 本地开发服务
+├── docker-compose.prod.yml      # 生产环境 Docker Compose
 ├── .env.example                 # 环境变量模板
 ├── requirements.txt             # Python 依赖
 ├── pytest.ini                   # pytest 配置

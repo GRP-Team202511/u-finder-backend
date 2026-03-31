@@ -1,3 +1,4 @@
+# This code was completed by GRP Team 2025.11.
 """
 Utils module - Utility functions
 """
@@ -13,7 +14,7 @@ from .jwt_utils import (
 from .password_utils import hash_password, verify_password, hash_token
 from .cleanup import cleanup_all_expired_records, cleanup_expired_temp_tokens, cleanup_expired_refresh_tokens
 from .email_utils import send_verification_email
-from .session_utils import save_session, get_session, delete_session, delete_all_user_sessions
+from .session_utils import save_session, get_session, delete_session, delete_all_user_sessions, normalize_user_agent
 from .totp_utils import (
     generate_totp_secret,
     get_totp_uri,
@@ -24,6 +25,7 @@ from .totp_utils import (
     generate_backup_codes,
     check_totp_replay,
 )
+from .turnstile import verify_turnstile_token
 
 __all__ = [
     "create_access_token",
@@ -44,6 +46,7 @@ __all__ = [
     "get_session",
     "delete_session",
     "delete_all_user_sessions",
+    "normalize_user_agent",
     "generate_totp_secret",
     "get_totp_uri",
     "verify_totp_code",
@@ -52,4 +55,5 @@ __all__ = [
     "decrypt_secret",
     "generate_backup_codes",
     "check_totp_replay",
+    "verify_turnstile_token",
 ]

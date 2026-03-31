@@ -1,10 +1,12 @@
+# This code was completed by GRP Team 2025.11.
 """
 Authentication router module
 Contains authentication related endpoints such as user login
 """
-from fastapi import APIRouter, HTTPException, Header, status, Depends
+from fastapi import APIRouter, HTTPException, Header, Request, status, Depends
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
@@ -53,6 +55,7 @@ from src.utils import (
     decrypt_secret,
     verify_totp_code,
     check_totp_replay,
+    normalize_user_agent,
 )
 from redis.asyncio import Redis
 from src.config.logger import get_logger
@@ -60,6 +63,7 @@ from src.config.constants import TokenType, UserType
 from src.database import get_db, get_redis, Account, UserProfile, TempToken, RefreshToken, TotpBackupCode
 from src.utils.session_utils import save_session, get_session, delete_session, delete_session_by_hash, delete_all_user_sessions
 from src.utils.auth_deps import get_current_user_id
+from src.utils.turnstile import verify_turnstile_token
 from user_agents import parse as parse_ua
 
 logger = get_logger(__name__)
@@ -153,6 +157,7 @@ async def _reset_password_with_code(
 )
 async def login(
     login_data: LoginRequest,
+    request: Request,
     user_agent: str = Header(default="Unknown", alias="User-Agent"),
     db: AsyncSession = Depends(get_db),
     redis: Optional[Redis] = Depends(get_redis),
@@ -164,6 +169,10 @@ async def login(
     - **password**: User password (required)
     """
     try:
+        # Cloudflare Turnstile verification
+        client_ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else None)
+        await verify_turnstile_token(login_data.turnstile_token, client_ip)
+
         logger.info(f"Login attempt for email: {login_data.email}")
         
         # Normalize email to lowercase
@@ -223,10 +232,11 @@ async def login(
         # Create refresh token and store in database
         refresh_token = create_temp_token()
         token_hashed = hash_token(refresh_token)
+        normalized_user_agent = normalize_user_agent(user_agent)
         refresh_token_record = RefreshToken(
             user_id=user.user_id,
             token_hashed=token_hashed,
-            user_agent=user_agent[:100],  # Limit to 100 chars
+            user_agent=normalized_user_agent,
             expire_at=datetime.now(timezone.utc) + timedelta(days=30)
         )
         db.add(refresh_token_record)
@@ -237,7 +247,7 @@ async def login(
             redis,
             token=refresh_token,
             user_id=user.user_id,
-            user_agent=user_agent[:100],
+            user_agent=normalized_user_agent,
         )
 
         logger.info(f"Login successful for user: {email}")
@@ -348,7 +358,7 @@ async def logout(
         409: {"model": ErrorResponse, "description": "Account exists"},
     },
 )
-async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
+async def signup(request: SignUpRequest, http_request: Request, db: AsyncSession = Depends(get_db)):
     """
     User signup endpoint
     
@@ -356,10 +366,14 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
     - **email**: User's email address
     - **password**: User's password
     
-    Note: New users are automatically assigned user_type=1 (student).
+    Note: New users are automatically assigned user_type=1 (user).
     
     Returns temp_token for email verification
     """
+    # Cloudflare Turnstile verification
+    client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
+    await verify_turnstile_token(request.turnstile_token, client_ip)
+
     logger.info(f"Signup attempt for email: {request.email}")
     
     # Normalize email to lowercase
@@ -397,7 +411,7 @@ async def signup(request: SignUpRequest, db: AsyncSession = Depends(get_db)):
             user_name=request.name,
             email=email,
             password_hashed=hash_password(request.password),
-            user_type=1,  # Default: student user type
+            user_type=UserType.USER,
             email_verified=False,
         )
         db.add(new_account)
@@ -621,10 +635,11 @@ async def _verify_signup_email_impl(
     
     # Create refresh token and store in database
     refresh_token = create_temp_token()
+    normalized_user_agent = normalize_user_agent(user_agent)
     refresh_token_record = RefreshToken(
         user_id=user.user_id,
         token_hashed=hash_token(refresh_token),
-        user_agent=user_agent[:100],  # Limit to 100 chars
+        user_agent=normalized_user_agent,
         expire_at=datetime.now(timezone.utc) + timedelta(days=30)
     )
     db.add(refresh_token_record)
@@ -697,22 +712,52 @@ async def verify_signup_email(
         404: {"model": ErrorResponse, "description": "No account record for this email"},
     },
 )
-async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+async def reset_password(
+    request: ResetPasswordRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    redis: Optional[Redis] = Depends(get_redis),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+):
     """
     Password reset request endpoint
     
     - **email**: User's email address
     
-    Returns temp_token for password reset verification
+    Returns temp_token for password reset verification.
+    Cloudflare Turnstile is required for unauthenticated requests only.
+    Authenticated users resetting their own password skip Turnstile.
     """
+    # If the user is already logged in and resetting their own password, skip Turnstile
+    is_self_reset = False
+    if authorization:
+        try:
+            auth_user_id = await get_current_user_id(authorization, db, redis)
+            # Verify the authenticated user is resetting their own password
+            email = request.email.lower()
+            result = await db.execute(select(Account).where(Account.email == email))
+            target_user = result.scalar_one_or_none()
+            if target_user and target_user.user_id == auth_user_id:
+                is_self_reset = True
+        except HTTPException:
+            pass  # Invalid token, treat as unauthenticated
+
+    if not is_self_reset:
+        # Cloudflare Turnstile verification for unauthenticated or non-self resets
+        client_ip = http_request.headers.get("CF-Connecting-IP") or (http_request.client.host if http_request.client else None)
+        await verify_turnstile_token(request.turnstile_token, client_ip)
+
     logger.info(f"Password reset request for email: {request.email}")
     
     # Normalize email to lowercase
     email = request.email.lower()
     
-    # Check if user exists
-    result = await db.execute(select(Account).where(Account.email == email))
-    user = result.scalar_one_or_none()
+    # Check if user exists (skip if already found during self-reset check)
+    if is_self_reset:
+        user = target_user
+    else:
+        result = await db.execute(select(Account).where(Account.email == email))
+        user = result.scalar_one_or_none()
     if not user:
         logger.warning(f"Password reset failed: No account for email: {email}")
         raise HTTPException(
@@ -1166,6 +1211,13 @@ async def delete_account(
                 detail={"message": "Invalid or expired token"},
             )
 
+        # Super admins cannot delete their own account
+        if user.user_type == UserType.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Super admin accounts cannot be deleted"},
+            )
+
         # Create temp token for deletion verification
         temp_token_raw = create_temp_token()
         temp_record = TempToken(
@@ -1277,6 +1329,15 @@ async def verify_delete_2fa(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"message": "Invalid or expired token"},
+            )
+
+        # Super admins cannot delete their own account
+        if user.user_type == UserType.SUPER_ADMIN:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Super admin accounts cannot be deleted"},
             )
 
         code = request.code.strip()
@@ -1397,6 +1458,15 @@ async def verify_delete_email(
                 detail={"message": "Invalid or expired token"},
             )
 
+        # Super admins cannot delete their own account
+        if user.user_type == UserType.SUPER_ADMIN:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Super admin accounts cannot be deleted"},
+            )
+
         # Delete all sessions from Redis
         if redis:
             await delete_all_user_sessions(redis, user.user_id)
@@ -1420,18 +1490,56 @@ async def verify_delete_email(
         )
 
 def _format_browser(ua) -> str:
-    """Return '<family> <major>' or 'Unknown'."""
+    """Return a normalized browser family name or 'Unknown'."""
     family = ua.browser.family
-    version = ua.browser.version_string
     if not family or family == "Other":
         return "Unknown"
-    # Only include major version for readability
-    major = version.split(".")[0] if version else ""
-    return f"{family} {major}".strip()
+
+    family_aliases = {
+        "Mobile Safari": "Safari",
+    }
+    return family_aliases.get(family, family)
 
 
-def _format_os(ua) -> str:
+def _extract_os_from_user_agent(user_agent: str) -> Optional[str]:
+    """Extract the most reliable OS label directly from a raw user-agent string."""
+    if not user_agent:
+        return None
+
+    ios_match = re.search(r"\b(?:CPU (?:iPhone )?OS|CPU OS|iPhone OS) ([0-9_]+)", user_agent, re.IGNORECASE)
+    if ios_match:
+        return f"iOS {ios_match.group(1).replace('_', '.')}"
+
+    android_match = re.search(r"\bAndroid ([0-9.]+)", user_agent, re.IGNORECASE)
+    if android_match:
+        return f"Android {android_match.group(1)}"
+
+    mac_match = re.search(r"\bMac OS X ([0-9_]+)", user_agent)
+    if mac_match and "like Mac OS X" not in user_agent:
+        return f"Mac OS X {mac_match.group(1).replace('_', '.')}"
+
+    windows_match = re.search(r"\bWindows NT ([0-9.]+)", user_agent, re.IGNORECASE)
+    if windows_match:
+        nt_version = windows_match.group(1)
+        windows_versions = {
+            "10.0": "Windows 10/11",
+            "6.3": "Windows 8.1",
+            "6.2": "Windows 8",
+            "6.1": "Windows 7",
+            "6.0": "Windows Vista",
+            "5.1": "Windows XP",
+        }
+        return windows_versions.get(nt_version, f"Windows NT {nt_version}")
+
+    return None
+
+
+def _format_os(ua, user_agent: str) -> str:
     """Return '<os_family> <os_version>' or 'Unknown'."""
+    os_from_user_agent = _extract_os_from_user_agent(user_agent)
+    if os_from_user_agent:
+        return os_from_user_agent
+
     family = ua.os.family
     version = ua.os.version_string
     if not family or family == "Other":
@@ -1584,7 +1692,7 @@ async def get_devices(
             devices.append(DeviceSession(
                 session_id=s.id,
                 browser=_format_browser(ua),
-                os=_format_os(ua),
+                os=_format_os(ua, s.user_agent or ""),
                 device_type=_parse_device_type(ua),
                 created_at=s.created_at.isoformat() if s.created_at else "",
                 is_current=(s.token_hashed == current_token_hashed),
