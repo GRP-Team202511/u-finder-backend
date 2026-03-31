@@ -1055,7 +1055,7 @@ async def admin_reset_verify(
         )
     
     # Update password
-    admin.password_hashed = hash_password(request.newPassword)
+    admin.password_hashed = hash_password(request.new_password)
     
     # Delete temp token
     await db.delete(reset_record)
