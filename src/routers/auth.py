@@ -1210,6 +1210,13 @@ async def delete_account(
                 detail={"message": "Invalid or expired token"},
             )
 
+        # Super admins cannot delete their own account
+        if user.user_type == UserType.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Super admin accounts cannot be deleted"},
+            )
+
         # Create temp token for deletion verification
         temp_token_raw = create_temp_token()
         temp_record = TempToken(
@@ -1321,6 +1328,15 @@ async def verify_delete_2fa(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"message": "Invalid or expired token"},
+            )
+
+        # Super admins cannot delete their own account
+        if user.user_type == UserType.SUPER_ADMIN:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Super admin accounts cannot be deleted"},
             )
 
         code = request.code.strip()
@@ -1439,6 +1455,15 @@ async def verify_delete_email(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"message": "Invalid or expired token"},
+            )
+
+        # Super admins cannot delete their own account
+        if user.user_type == UserType.SUPER_ADMIN:
+            await db.delete(token_record)
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"message": "Super admin accounts cannot be deleted"},
             )
 
         # Delete all sessions from Redis
