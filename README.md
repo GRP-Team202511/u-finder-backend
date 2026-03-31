@@ -41,10 +41,12 @@ U-Finder Backend is an async RESTful API server built with FastAPI and Python 3.
 - **CV Upload & AI Parsing** - Upload PDF/DOCX, parse via Dify AI workflow, and return structured profile data
 - **AI Chat (SSE Streaming)** - Real-time streaming chat proxy to Dify agent with user profile injection for personalised recommendations
 - **Liked University Programmes** - Check, like, unlike with two-level deduplication (URL + normalised name)
-- **Admin Dashboard** - JWT-based admin auth, user KPIs, LLM cost monitoring, system log preview, and user management (block/unblock/delete)
+- **Admin Dashboard** - JWT-based admin auth with super admin role, user KPIs, LLM cost monitoring (Aliyun & Tencent Cloud billing), system log preview with pagination, and user management (block/unblock/delete)
 - **LLM Usage Logging** - Per-request token and cost tracking for chat and CV parsing workflows
 - **Background Cleanup** - Hourly automatic cleanup of expired tokens and stale Redis sessions
-- **Role-Based Access Control** - Three user types: Student (1), Institution (2), Admin (3)
+- **Anti-Bot Protection** - Cloudflare Turnstile integration for signup, login, and password reset
+- **Cloud Billing Monitoring** - Aliyun and Tencent Cloud API cost tracking for the admin dashboard
+- **Role-Based Access Control** - Four user types: Student (1), Institution (2), Admin (3), Super Admin (4)
 
 ## Tech Stack
 
@@ -62,7 +64,9 @@ U-Finder Backend is an async RESTful API server built with FastAPI and Python 3.
 - **Image Processing**: [Pillow](https://pillow.readthedocs.io/) + [pillow-heif](https://github.com/bigcat88/pillow_heif) - Avatar processing with HEIC/HEIF support
 - **Validation**: [Pydantic](https://docs.pydantic.dev/) 2.12 + [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) - Data validation and env config
 - **Testing**: [pytest](https://docs.pytest.org/) + [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) + [pytest-cov](https://github.com/pytest-dev/pytest-cov) + [httpx](https://www.python-httpx.org/) (ASGITransport)
-- **CI/CD**: [GitHub Actions](https://github.com/features/actions) - Automated testing on push/PR
+- **CI/CD**: [GitHub Actions](https://github.com/features/actions) - CI testing on push/PR, CD staging & production deployment
+- **Containerization**: [Docker](https://www.docker.com/) + [Docker Compose](https://docs.docker.com/compose/) - Containerized deployment with PostgreSQL and Redis
+- **Anti-Bot**: [Cloudflare Turnstile](https://www.cloudflare.com/products/turnstile/) - Bot protection for auth endpoints
 
 ## Getting Started
 
@@ -180,7 +184,9 @@ backend/
 │   ├── services/
 │   │   ├── dify_service.py      # Dify AI API integration (chat, CV parsing, feedback)
 │   │   ├── university_service.py # University programme deduplication
-│   │   └── llm_usage_service.py # LLM usage & cost logging
+│   │   ├── llm_usage_service.py # LLM usage & cost logging
+│   │   ├── aliyun_billing_service.py  # Aliyun Cloud billing API
+│   │   └── tencent_billing_service.py # Tencent Cloud billing API
 │   ├── utils/
 │   │   ├── jwt_utils.py         # JWT creation, verification, temp tokens
 │   │   ├── password_utils.py    # bcrypt hashing, HMAC-SHA256 token hashing
@@ -188,11 +194,13 @@ backend/
 │   │   ├── email_utils.py       # Async SMTP email with HTML templates
 │   │   ├── session_utils.py     # Redis session CRUD (cache-aside pattern)
 │   │   ├── auth_deps.py         # Shared auth dependency (get_current_user_id)
-│   │   └── cleanup.py           # Expired token cleanup utilities
+│   │   ├── cleanup.py           # Expired token cleanup utilities
+│   │   └── turnstile.py         # Cloudflare Turnstile verification
 │   └── templates/
 │       └── emails/              # HTML email templates
 │           ├── verification-email.html
-│           └── resetpassword-email.html
+│           ├── resetpassword-email.html
+│           └── delete-account-email.html
 ├── tests/
 │   ├── conftest.py              # Test fixtures, mock DB/Redis, fake data factories
 │   ├── unit/                    # Unit tests (utilities, schemas, services)
@@ -202,9 +210,18 @@ backend/
 │   └── integration/             # End-to-end workflow tests
 ├── scripts/
 │   └── test_2fa_manual.py       # Manual 2FA lifecycle test script
+├── docker/
+│   └── db/
+│       └── init.sql             # PostgreSQL schema initialization
 ├── .github/
 │   └── workflows/
-│       └── ci.yml               # GitHub Actions CI pipeline
+│       ├── ci.yml               # GitHub Actions CI pipeline
+│       ├── cd-staging.yml       # CD staging deployment
+│       ├── cd-production.yml    # CD production deployment
+│       └── docker-build.yml     # Docker image build workflow
+├── Dockerfile                   # Production Docker image
+├── docker-compose.yml           # Local development services
+├── docker-compose.prod.yml      # Production Docker Compose
 ├── .env.example                 # Environment variable template
 ├── requirements.txt             # Python dependencies
 ├── pytest.ini                   # pytest configuration
