@@ -960,16 +960,38 @@ def _parse_device_type(ua) -> str:
     summary="Admin Password Reset Request",
     responses={
         404: {"description": "No account record for this email"},
+        403: {"description": "Account is not an admin"},
     },
 )
 async def admin_reset_password(
     request: ResetPasswordRequest,
-    admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Request password reset for admin user using their email."""
-    logger.info(f"Admin password reset request for user_id: {admin.user_id}")
-    
+    """Request password reset for admin user using their email.
+    No authentication required — this is the 'forgot password' flow."""
+    logger.info(f"Admin password reset request for email: {request.email}")
+
+    email = request.email.lower()
+
+    # Look up account by email
+    result = await db.execute(select(Account).where(Account.email == email))
+    admin = result.scalar_one_or_none()
+
+    if not admin:
+        logger.warning(f"Admin password reset failed: No account for email: {email}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": "No account record for this email"},
+        )
+
+    # Verify the account is an admin
+    if not UserType.is_admin_level(admin.user_type):
+        logger.warning(f"Admin password reset failed: Non-admin account for email: {email}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"message": "Account is not an admin"},
+        )
+
     # Generate temp token and reset code
     temp_token = create_temp_token()
     reset_code = generate_verification_code()
@@ -1014,11 +1036,11 @@ async def admin_reset_password(
 async def admin_reset_verify(
     request: ConfirmResetPasswordRequest,
     temp_token: str = Header(..., alias="Temp-Token"),
-    admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify password reset code and update admin password."""
-    logger.info(f"Admin password reset verification for user_id: {admin.user_id}")
+    """Verify password reset code and update admin password.
+    No authentication required — uses temp_token to identify the reset request."""
+    logger.info("Admin password reset verification attempt")
     
     temp_token_hashed = hash_token(temp_token)
     
@@ -1027,13 +1049,12 @@ async def admin_reset_verify(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == TokenType.PASSWORD_RESET,
-            TempToken.user_id == admin.user_id,
         )
     )
     reset_record = result.scalar_one_or_none()
     
     if not reset_record:
-        logger.warning(f"Admin password reset failed: Invalid temp token for user_id={admin.user_id}")
+        logger.warning("Admin password reset failed: Invalid temp token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"message": "Wrong code or expired token"}
@@ -1041,7 +1062,7 @@ async def admin_reset_verify(
     
     # Check if expired
     if datetime.now(timezone.utc) > reset_record.expire_at:
-        logger.warning(f"Admin password reset failed: Expired token for user_id={admin.user_id}")
+        logger.warning("Admin password reset failed: Expired token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"message": "Wrong code or expired token"}
@@ -1049,7 +1070,20 @@ async def admin_reset_verify(
     
     # Verify code against stored hash
     if not reset_record.verification_code_hashed or not verify_password(request.code, reset_record.verification_code_hashed):
-        logger.warning(f"Admin password reset failed: Invalid verification code for user_id={admin.user_id}")
+        logger.warning("Admin password reset failed: Invalid verification code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Wrong code or expired token"}
+        )
+    
+    # Find the admin account
+    result = await db.execute(
+        select(Account).where(Account.user_id == reset_record.user_id)
+    )
+    admin = result.scalar_one_or_none()
+    
+    if not admin or not UserType.is_admin_level(admin.user_type):
+        logger.error(f"Admin password reset failed: Admin not found for user_id={reset_record.user_id}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"message": "Wrong code or expired token"}
@@ -1079,11 +1113,11 @@ async def admin_reset_verify(
 )
 async def admin_reset_resend(
     temp_token: str = Header(..., alias="Temp-Token"),
-    admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Resend password reset verification code to admin."""
-    logger.info(f"Admin resend reset code for user_id: {admin.user_id}")
+    """Resend password reset verification code to admin.
+    No authentication required — uses temp_token to identify the reset request."""
+    logger.info("Admin resend reset code attempt")
     
     temp_token_hashed = hash_token(temp_token)
     
@@ -1092,13 +1126,12 @@ async def admin_reset_resend(
         select(TempToken).where(
             TempToken.token_hashed == temp_token_hashed,
             TempToken.token_type == TokenType.PASSWORD_RESET,
-            TempToken.user_id == admin.user_id,
         )
     )
     reset_record = result.scalar_one_or_none()
     
     if not reset_record:
-        logger.warning(f"Admin resend reset code failed: Invalid temp token")
+        logger.warning("Admin resend reset code failed: Invalid temp token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"message": "Token expired or invalid"}
@@ -1108,7 +1141,7 @@ async def admin_reset_resend(
     
     # Check if expired
     if now > reset_record.expire_at:
-        logger.warning(f"Admin resend reset code failed: Expired token")
+        logger.warning("Admin resend reset code failed: Expired token")
         await db.delete(reset_record)
         await db.commit()
         raise HTTPException(
@@ -1120,7 +1153,7 @@ async def admin_reset_resend(
     if reset_record.created_at:
         retry_after = 60 - int((now - reset_record.created_at).total_seconds())
         if retry_after > 0:
-            logger.warning(f"Admin resend reset code throttled")
+            logger.warning("Admin resend reset code throttled")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail={
@@ -1128,6 +1161,19 @@ async def admin_reset_resend(
                     "retryAfter": retry_after,
                 }
             )
+    
+    # Find the admin user
+    result = await db.execute(
+        select(Account).where(Account.user_id == reset_record.user_id)
+    )
+    admin = result.scalar_one_or_none()
+    
+    if not admin:
+        logger.error(f"Admin resend reset code failed: User not found for user_id: {reset_record.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"message": "Token expired or invalid"}
+        )
     
     # Generate and send new reset code
     reset_code = generate_verification_code()
