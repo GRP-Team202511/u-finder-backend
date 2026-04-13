@@ -6,8 +6,7 @@ Provides unified logging functionality with console and file output
 import logging
 import sys
 from pathlib import Path
-from logging.handlers import RotatingFileHandler
-from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 
 
 # Logger configuration
@@ -18,9 +17,8 @@ DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 # Log file configuration
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
-LOG_FILE = LOG_DIR / f"app_{datetime.now().strftime('%Y%m%d')}.log"
-MAX_BYTES = 10 * 1024 * 1024  # 10MB
-BACKUP_COUNT = 5
+LOG_FILE = LOG_DIR / "app.log"
+BACKUP_COUNT = 30  # Keep 30 days of logs
 
 
 def setup_logger(name: str = None, level: int = LOG_LEVEL) -> logging.Logger:
@@ -52,12 +50,14 @@ def setup_logger(name: str = None, level: int = LOG_LEVEL) -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # File handler with rotation
-    file_handler = RotatingFileHandler(
+    # File handler with daily rotation at midnight (UTC)
+    file_handler = TimedRotatingFileHandler(
         LOG_FILE,
-        maxBytes=MAX_BYTES,
+        when='midnight',
+        interval=1,
         backupCount=BACKUP_COUNT,
-        encoding='utf-8'
+        encoding='utf-8',
+        utc=True,
     )
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
