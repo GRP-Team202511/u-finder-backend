@@ -277,10 +277,10 @@ async def admin_login(
 )
 async def get_dashboard_summary(
     logs_date: Optional[str] = Query(None, description="Date for logs preview (YYYY-MM-DD), defaults to today"),
-    logs_level: Optional[str] = Query("all", regex="^(all|info|warn|error)$"),
+    logs_level: Optional[str] = Query("all", pattern="^(all|info|warn|error)$"),
     logs_page: Optional[int] = Query(1, ge=1, description="Logs page number (1-based)"),
     logs_per_page: Optional[int] = Query(10, ge=1, le=50, description="Logs per page (1-50)"),
-    cost_model: Optional[str] = Query("chat", regex="^(chat|cv_parsing)$"),
+    cost_model: Optional[str] = Query("chat", pattern="^(chat|cv_parsing)$"),
     cost_date: Optional[str] = Query(None, description="Date for model cost snapshot (YYYY-MM-DD), defaults to yesterday"),
     admin: Account = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1685,8 +1685,18 @@ def _parse_log_file(target_date: date, level: str) -> List[LogEntry]:
     """
     Parse a single day's log file and return all matching entries
     in newest-first order.
+
+    TimedRotatingFileHandler (utc=True, when='midnight') uses:
+      - Active file:  logs/app.log           (today's logs)
+      - Rotated file: logs/app.log.YYYY-MM-DD (past dates)
     """
-    log_file = LOG_DIR / f"app_{target_date.strftime('%Y%m%d')}.log"
+    today_utc = datetime.now(timezone.utc).date()
+
+    if target_date == today_utc:
+        log_file = LOG_DIR / "app.log"
+    else:
+        log_file = LOG_DIR / f"app.log.{target_date.isoformat()}"
+
     if not log_file.exists():
         return []
 

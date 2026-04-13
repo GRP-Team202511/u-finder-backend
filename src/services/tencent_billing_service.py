@@ -11,6 +11,7 @@ Reference: https://cloud.tencent.com/document/api/555/19182
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import date
@@ -136,7 +137,7 @@ async def get_daily_cost(
         logger.warning("Tencent Cloud credentials not configured, returning zero cost")
         return _empty_cost(target_date)
 
-    items = _fetch_month_details(target_date, product_code)
+    items = await asyncio.to_thread(_fetch_month_details, target_date, product_code)
     result = _aggregate_items(items, target_date.isoformat())
     return result
 
@@ -154,7 +155,7 @@ async def get_cost_by_date(
         return _empty_cost(target_date)
 
     target_str = target_date.isoformat()  # "2026-03-30"
-    all_items = _fetch_month_details(target_date, product_code)
+    all_items = await asyncio.to_thread(_fetch_month_details, target_date, product_code)
 
     # BillDay format: "2026-03-30 00:00:00"
     day_items = [
