@@ -8,6 +8,7 @@ Reference: https://help.aliyun.com/zh/user-center/developer-reference/api-bssope
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
@@ -42,30 +43,8 @@ def _create_client() -> BssOpenApiClient:
     return BssOpenApiClient(config)
 
 
-async def get_daily_cost(
-    target_date: date,
-) -> AliyunDailyCost:
-    """
-    Query Alibaba Cloud DescribeInstanceBill for the month containing *target_date*.
-
-    Only ``BillingCycle`` (YYYY-MM) is sent to the API; the response
-    contains all items for that billing month.
-
-    Args:
-        target_date: A date within the billing month to query.
-
-    Returns:
-        AliyunDailyCost with aggregated totals for the billing month.
-    """
-    if not settings.aliyun_access_key_id or not settings.aliyun_access_key_secret:
-        logger.warning("Alibaba Cloud credentials not configured, returning zero cost")
-        return AliyunDailyCost(
-            billing_date=target_date.isoformat(),
-            total_pretax_amount=0.0,
-            total_requests=0,
-            currency="CNY",
-        )
-
+def _sync_get_daily_cost(target_date: date) -> AliyunDailyCost:
+    """Synchronous implementation — called via asyncio.to_thread()."""
     billing_cycle = target_date.strftime("%Y-%m")
     billing_date_str = target_date.isoformat()
 
@@ -116,13 +95,23 @@ async def get_daily_cost(
     )
 
 
-async def get_cost_by_date(target_date: date) -> AliyunDailyCost:
-    """Query Alibaba Cloud DescribeInstanceBill for a **single day**.
+async def get_daily_cost(
+    target_date: date,
+) -> AliyunDailyCost:
+    """
+    Query Alibaba Cloud DescribeInstanceBill for the month containing *target_date*.
 
-    Uses ``BillingCycle`` + ``BillingDate`` + ``Granularity=DAILY``
-    (without ``ProductCode`` to avoid *ProductNotFind* errors).
+    Only ``BillingCycle`` (YYYY-MM) is sent to the API; the response
+    contains all items for that billing month.
+
+    Args:
+        target_date: A date within the billing month to query.
+
+    Returns:
+        AliyunDailyCost with aggregated totals for the billing month.
     """
     if not settings.aliyun_access_key_id or not settings.aliyun_access_key_secret:
+        logger.warning("Alibaba Cloud credentials not configured, returning zero cost")
         return AliyunDailyCost(
             billing_date=target_date.isoformat(),
             total_pretax_amount=0.0,
@@ -130,6 +119,11 @@ async def get_cost_by_date(target_date: date) -> AliyunDailyCost:
             currency="CNY",
         )
 
+    return await asyncio.to_thread(_sync_get_daily_cost, target_date)
+
+
+def _sync_get_cost_by_date(target_date: date) -> AliyunDailyCost:
+    """Synchronous implementation — called via asyncio.to_thread()."""
     billing_cycle = target_date.strftime("%Y-%m")
     billing_date_str = target_date.isoformat()
     client = _create_client()
@@ -179,3 +173,20 @@ async def get_cost_by_date(target_date: date) -> AliyunDailyCost:
         total_requests=total_items,
         currency=currency,
     )
+
+
+async def get_cost_by_date(target_date: date) -> AliyunDailyCost:
+    """Query Alibaba Cloud DescribeInstanceBill for a **single day**.
+
+    Uses ``BillingCycle`` + ``BillingDate`` + ``Granularity=DAILY``
+    (without ``ProductCode`` to avoid *ProductNotFind* errors).
+    """
+    if not settings.aliyun_access_key_id or not settings.aliyun_access_key_secret:
+        return AliyunDailyCost(
+            billing_date=target_date.isoformat(),
+            total_pretax_amount=0.0,
+            total_requests=0,
+            currency="CNY",
+        )
+
+    return await asyncio.to_thread(_sync_get_cost_by_date, target_date)
